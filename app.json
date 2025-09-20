@@ -17,7 +17,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app uses location to show you nearby photogenic spots on the map."
-      }
+      },
+      "bundleIdentifier": "com.anonymous.Photospots"
     },
     "android": {
       "adaptiveIcon": {
@@ -28,8 +29,11 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION"
-      ]
+      ],
+      "package": "com.anonymous.Photospots"
     },
     "web": {
       "bundler": "metro",
@@ -41,8 +45,7 @@
       [
         "@rnmapbox/maps",
         {
-          "RNMapboxMapsDownloadToken": "MAPBOX_DOWNLOAD_TOKEN_PLACEHOLDER",
-          "RNMapboxMapsVersion": "11.0.0"
+          "RNMapboxMapsDownloadToken": "sk.eyJ1IjoibWFrYmFyYWxpIiwiYSI6ImNtZnNvYzgydDA3d3oya29ldHdvZGthMGUifQ.oKMgorguRUzYRIUsU86USQ"
         }
       ]
     ],
