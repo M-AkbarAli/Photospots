@@ -1,0 +1,42 @@
+{
+  "name": "photospots-backend",
+  "version": "1.0.0",
+  "description": "Backend service for Photospots, a platform for discovering photogenic locations.",
+  "main": "src/app.ts",
+  "scripts": {
+    "start": "ts-node src/app.ts",
+    "build": "tsc",
+    "test": "jest",
+    "lint": "eslint . --ext .ts"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "aws-sdk": "^2.1030.0",
+    "bcrypt": "^5.0.1",
+    "cors": "^2.8.5",
+    "dotenv": "^10.0.0",
+    "express": "^4.17.1",
+    "joi": "^17.4.2",
+    "jsonwebtoken": "^8.5.1",
+    "pg": "^8.7.1",
+    "redis": "^3.1.2",
+    "supabase-js": "^1.28.0"
+  },
+  "devDependencies": {
+    "typescript": "^4.4.4",
+    "ts-node": "^10.4.0",
+    "jest": "^27.0.6",
+    "eslint": "^7.32.0",
+    "@types/jest": "^27.0.2",
+    "@types/express": "^4.17.13",
+    "@types/node": "^16.11.7"
+  },
+  "keywords": [
+    "photography",
+    "geolocation",
+    "hotspots",
+    "api"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}
