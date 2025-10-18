@@ -225,7 +225,7 @@ Run these checks:
 
 ```bash
 # 1) In your frontend or Supabase dashboard, sign in and copy the JWT
-TOKEN="<paste your Supabase user JWT>"
+TOKEN="h5UbRqnzI3hObJbw0XI7GdINqB5NXc7Ndwdb3VCf27FXfaGfEYqcLP8fvNZyuwG4yF7YRjP84us5m+44tSHAqw=="
 
 # 2) Check current user
 curl -H "Authorization: Bearer $TOKEN" \
