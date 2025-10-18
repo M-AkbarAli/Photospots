@@ -1,16 +1,51 @@
 import Mapbox from '@rnmapbox/maps';
-import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import * as Location from 'expo-location';
+import React, { useEffect, useState } from 'react';
+import { Alert, StyleSheet, View } from 'react-native';
 
-// Minimal Mapbox screen: no location, just a static map centered on Toronto.
+// Map access token (falls back to demo token for local/dev)
 Mapbox.setAccessToken(process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN || 'pk.demo_token');
 
 export default function TabOneScreen() {
+  // centerCoordinate is [longitude, latitude]
+  const [centerCoordinate, setCenterCoordinate] = useState<number[] | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          // fallback to Toronto if permission denied
+          if (mounted) {
+            Alert.alert(
+              'Location permission',
+              'Location permission was not granted. The map will fall back to Toronto.'
+            );
+            setCenterCoordinate([-79.3832, 43.6532]);
+          }
+          return;
+        }
+
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
+        if (mounted && loc?.coords) {
+          setCenterCoordinate([loc.coords.longitude, loc.coords.latitude]);
+        }
+      } catch (err) {
+        console.warn('Failed to get location', err);
+        if (mounted) setCenterCoordinate([-79.3832, 43.6532]);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   return (
     <View style={styles.container}>
       <Mapbox.MapView style={styles.map} styleURL={Mapbox.StyleURL.Street}>
         <Mapbox.Camera
-          centerCoordinate={[-79.3832, 43.6532]} // Toronto (lon, lat)
+          centerCoordinate={centerCoordinate ?? [-79.3832, 43.6532]}
           zoomLevel={13}
         />
       </Mapbox.MapView>

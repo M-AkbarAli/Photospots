@@ -1,20 +1,21 @@
-// src/types/user.ts
-
 export interface User {
-    id: string;
-    username: string;
-    email: string;
-    passwordHash: string;
-    createdAt: Date;
-    updatedAt: Date;
+  id: string;
+  username?: string;
+  display_name?: string;
+  avatar_url?: string;
+  created_at: string;
+  updated_at: string;
 }
 
-export interface UserProfile {
-    userId: string;
-    bio?: string;
-    profilePictureUrl?: string;
-    websiteUrl?: string;
-    socialLinks?: {
-        [key: string]: string; // e.g., { twitter: "https://twitter.com/user" }
-    };
+export interface UserSubmission {
+  id: string;
+  user_id: string;
+  lat: number;
+  lng: number;
+  name: string;
+  tip?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  created_at: string;
+  reviewed_at?: string;
+  reviewed_by?: string;
 }

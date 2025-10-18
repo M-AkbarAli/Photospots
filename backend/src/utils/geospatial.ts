@@ -1,40 +1,74 @@
-import { LatLng } from '../types/hotspot';
-
 /**
- * Calculates the distance between two geographical points using the Haversine formula.
- * @param {LatLng} point1 - The first point with latitude and longitude.
- * @param {LatLng} point2 - The second point with latitude and longitude.
- * @returns {number} - The distance in kilometers between the two points.
+ * Calculate distance between two points using Haversine formula
+ * Returns distance in meters
  */
-export function haversineDistance(point1: LatLng, point2: LatLng): number {
-    const R = 6371; // Radius of the Earth in kilometers
-    const dLat = degreesToRadians(point2.lat - point1.lat);
-    const dLon = degreesToRadians(point2.lng - point1.lng);
-    const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(degreesToRadians(point1.lat)) * Math.cos(degreesToRadians(point2.lat)) *
-        Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c; // Distance in kilometers
+export function haversineDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const R = 6371000; // Earth's radius in meters
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
 }
 
 /**
- * Converts degrees to radians.
- * @param {number} degrees - The angle in degrees.
- * @returns {number} - The angle in radians.
+ * Validate latitude value
  */
-function degreesToRadians(degrees: number): number {
-    return degrees * (Math.PI / 180);
+export function isValidLatitude(lat: number): boolean {
+  return typeof lat === 'number' && lat >= -90 && lat <= 90;
 }
 
 /**
- * Checks if a point is within a specified radius of another point.
- * @param {LatLng} center - The center point.
- * @param {LatLng} point - The point to check.
- * @param {number} radius - The radius in kilometers.
- * @returns {boolean} - True if the point is within the radius, false otherwise.
+ * Validate longitude value
  */
-export function isWithinRadius(center: LatLng, point: LatLng, radius: number): boolean {
-    const distance = haversineDistance(center, point);
-    return distance <= radius;
+export function isValidLongitude(lng: number): boolean {
+  return typeof lng === 'number' && lng >= -180 && lng <= 180;
+}
+
+/**
+ * Validate coordinate pair
+ */
+export function isValidCoordinate(lat: number, lng: number): boolean {
+  return isValidLatitude(lat) && isValidLongitude(lng);
+}
+
+/**
+ * Calculate bounding box around a point
+ * @param lat - Latitude
+ * @param lng - Longitude
+ * @param radiusMeters - Radius in meters
+ * @returns Bounding box [minLat, minLng, maxLat, maxLng]
+ */
+export function getBoundingBox(
+  lat: number,
+  lng: number,
+  radiusMeters: number
+): [number, number, number, number] {
+  const latDelta = (radiusMeters / 111320); // 1 degree latitude ≈ 111.32 km
+  const lngDelta = radiusMeters / (111320 * Math.cos((lat * Math.PI) / 180));
+
+  return [
+    lat - latDelta,  // minLat
+    lng - lngDelta,  // minLng
+    lat + latDelta,  // maxLat
+    lng + lngDelta,  // maxLng
+  ];
+}
+
+/**
+ * Format coordinates for display
+ */
+export function formatCoordinate(lat: number, lng: number, precision: number = 6): string {
+  return `${lat.toFixed(precision)}, ${lng.toFixed(precision)}`;
 }

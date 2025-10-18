@@ -1,42 +1,56 @@
 {
   "name": "photospots-backend",
   "version": "1.0.0",
-  "description": "Backend service for Photospots, a platform for discovering photogenic locations.",
-  "main": "src/app.ts",
+  "description": "Supabase-first backend for Photospots - discover photogenic locations",
+  "main": "dist/app.js",
+  "type": "module",
   "scripts": {
-    "start": "ts-node src/app.ts",
+    "dev": "tsx watch src/app.ts",
+    "start": "node dist/app.js",
     "build": "tsc",
     "test": "jest",
-    "lint": "eslint . --ext .ts"
-  },
-  "dependencies": {
-    "@react-native-async-storage/async-storage": "2.2.0",
-    "aws-sdk": "^2.1030.0",
-    "bcrypt": "^5.0.1",
-    "cors": "^2.8.5",
-    "dotenv": "^10.0.0",
-    "express": "^4.17.1",
-    "joi": "^17.4.2",
-    "jsonwebtoken": "^8.5.1",
-    "pg": "^8.7.1",
-    "redis": "^3.1.2",
-    "supabase-js": "^1.28.0"
-  },
-  "devDependencies": {
-    "typescript": "^4.4.4",
-    "ts-node": "^10.4.0",
-    "jest": "^27.0.6",
-    "eslint": "^7.32.0",
-    "@types/jest": "^27.0.2",
-    "@types/express": "^4.17.13",
-    "@types/node": "^16.11.7"
+    "test:watch": "jest --watch",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "db:migrate": "node scripts/migrate.js",
+    "db:seed": "tsx src/db/seed.ts"
   },
   "keywords": [
     "photography",
     "geolocation",
     "hotspots",
-    "api"
+    "supabase",
+    "postgres",
+    "postgis"
   ],
-  "author": "Your Name",
-  "license": "MIT"
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1",
+    "joi": "^17.11.0",
+    "redis": "^4.6.11",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.11",
+    "@types/node": "^20.10.6",
+    "@typescript-eslint/eslint-plugin": "^6.16.0",
+    "@typescript-eslint/parser": "^6.16.0",
+    "eslint": "^8.56.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.1.1",
+    "ts-jest": "^29.1.1",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }

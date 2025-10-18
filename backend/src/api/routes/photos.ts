@@ -1,20 +1,28 @@
-import { Router } from 'express';
-import { uploadPhoto, getPhotos, getPhotoById, deletePhoto } from '../controllers/photoController';
-import { authenticate } from '../middlewares/auth';
-import { validatePhotoUpload } from '../middlewares/validation';
+import { Router, type Request, type Response } from 'express';
 
 const router = Router();
 
-// Route to upload a new photo
-router.post('/', authenticate, validatePhotoUpload, uploadPhoto);
+/**
+ * GET /v1/photos
+ * List photos (TODO: implement)
+ */
+router.get('/', async (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    message: 'Photos endpoint - coming soon',
+    data: [],
+  });
+});
 
-// Route to get all photos
-router.get('/', getPhotos);
-
-// Route to get a specific photo by ID
-router.get('/:id', getPhotoById);
-
-// Route to delete a photo by ID
-router.delete('/:id', authenticate, deletePhoto);
+/**
+ * POST /v1/photos
+ * Upload a photo (TODO: implement with Supabase Storage)
+ */
+router.post('/', async (_req: Request, res: Response) => {
+  res.status(501).json({
+    error: 'Not implemented',
+    message: 'Photo upload will be implemented with Supabase Storage integration',
+  });
+});
 
 export default router;
