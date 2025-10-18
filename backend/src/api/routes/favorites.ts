@@ -1,6 +1,10 @@
 import { Router, type Request, type Response } from 'express';
+import { requireAuth } from '../middlewares/auth.js';
 
 const router = Router();
+
+// All favorites routes require auth
+router.use(requireAuth);
 
 /**
  * GET /v1/favorites

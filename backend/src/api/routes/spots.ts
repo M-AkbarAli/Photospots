@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { SpotService } from '../../services/spotService.js';
 import { isValidCoordinate } from '../../utils/geospatial.js';
+import { requireAuth } from '../middlewares/auth.js';
 
 const router = Router();
 const spotService = new SpotService();
@@ -126,7 +127,7 @@ router.get('/:id', async (req: Request, res: Response) => {
  * POST /v1/spots
  * Create a new spot (requires auth - TODO: add auth middleware)
  */
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', requireAuth, async (req: Request, res: Response) => {
   try {
     const { name, lat, lng, categories, description } = req.body;
 

@@ -26,3 +26,17 @@ export const supabaseConfig = {
   anonKey: supabaseAnonKey,
   serviceKey: supabaseServiceKey,
 };
+
+// Create a per-request client that carries the user's JWT for RLS-aware queries
+export function getSupabaseForRequest(token?: string): SupabaseClient {
+  if (!token) {
+    return supabase;
+  }
+  return createClient(supabaseUrl as string, supabaseAnonKey as string, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  });
+}

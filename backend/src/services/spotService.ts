@@ -21,8 +21,9 @@ export class SpotService {
 
     // Call RPC function
     const { data, error } = await supabase.rpc('api_spots_nearby', {
-      lat,
-      lng,
+      // map API params to SQL function param names
+      search_lat: lat,
+      search_lng: lng,
       radius_m: radius,
       result_limit: 200,
     });
@@ -88,8 +89,9 @@ export class SpotService {
 
     const { data, error } = await supabase.rpc('api_spots_search', {
       search_query: query,
-      lat: lat || null,
-      lng: lng || null,
+      // match SQL param names
+      search_lat: lat ?? null,
+      search_lng: lng ?? null,
       result_limit: 50,
     });
 

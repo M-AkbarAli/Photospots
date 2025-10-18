@@ -220,8 +220,29 @@ Run these checks:
 
 ### Path A: Add Authentication (30 min)
 1. Enable Supabase Auth providers (Email, Google, Apple)
-2. Add auth middleware to protected routes
-3. Test with Supabase client in frontend
+2. Add auth middleware to protected routes (done in code: requireAuth)
+3. Test your token against the API
+
+```bash
+# 1) In your frontend or Supabase dashboard, sign in and copy the JWT
+TOKEN="<paste your Supabase user JWT>"
+
+# 2) Check current user
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3000/v1/auth/me
+
+# 3) Try creating a spot (now protected)
+curl -X POST http://localhost:3000/v1/spots \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Test Auth Spot",
+    "lat": 37.77,
+    "lng": -122.42,
+    "categories": ["test"],
+    "description": "Created with auth"
+  }'
+```
 
 ### Path B: Set Up Image Storage (20 min)
 1. Create Supabase Storage buckets

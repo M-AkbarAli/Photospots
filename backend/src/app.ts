@@ -1,6 +1,8 @@
 import cors from 'cors';
 import dotenv from 'dotenv';
 import express, { type Express, type Request, type Response } from 'express';
+import { optionalAuth } from './api/middlewares/auth.js';
+import authRouter from './api/routes/auth.js';
 import favoritesRouter from './api/routes/favorites.js';
 import photosRouter from './api/routes/photos.js';
 import spotsRouter from './api/routes/spots.js';
@@ -15,6 +17,7 @@ const app: Express = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(optionalAuth);
 
 // Health check
 app.get('/health', (_req: Request, res: Response) => {
@@ -29,6 +32,7 @@ app.get('/health', (_req: Request, res: Response) => {
 app.use('/v1/spots', spotsRouter);
 app.use('/v1/photos', photosRouter);
 app.use('/v1/favorites', favoritesRouter);
+app.use('/v1/auth', authRouter);
 
 // 404 handler
 app.use((_req: Request, res: Response) => {
