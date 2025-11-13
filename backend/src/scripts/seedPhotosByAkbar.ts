@@ -1,4 +1,5 @@
 import { config } from '../config/index.js';
+import { createClient } from '@supabase/supabase-js';
 
 /**
  * STEP 1: Fetch photos from Flickr API
@@ -225,10 +226,7 @@ interface Hotspot {
   photos: FlickrPhoto[];
 }
 
-function groupPhotosIntoHotspots(
-  landmark: Landmark,
-  minPhotosPerHotspot: number = 3
-): Hotspot[] {
+function groupPhotosIntoHotspots(landmark: Landmark, minPhotosPerHotspot: number = 3): Hotspot[] {
   console.log(`\n  📍 Grouping photos for landmark: ${landmark.name}`);
 
   // STEP 3A: Define precision - round coordinates to 4 decimal places
@@ -244,6 +242,8 @@ function groupPhotosIntoHotspots(
     if (!photo.latitude || !photo.longitude) continue;
 
     // Convert to numbers and ensure they're numbers (Flickr sometimes returns strings)
+    //(condition) ? (value if true) : (value if false)
+
     const lat = typeof photo.latitude === 'string' ? parseFloat(photo.latitude) : photo.latitude;
     const lng = typeof photo.longitude === 'string' ? parseFloat(photo.longitude) : photo.longitude;
 
@@ -263,7 +263,7 @@ function groupPhotosIntoHotspots(
 
   for (const [hotspotKey, photos] of hotspotMap.entries()) {
     // Skip hotspots with too few photos (not proven)
-    if (photos.length < minPhotosPerHotspot) {
+    if (photos.length < minPhotosPerHotspot) {  
       continue;
     }
 
@@ -285,51 +285,237 @@ function groupPhotosIntoHotspots(
 }
 
 /**
- * Main function - TEST STEPS 1, 2 & 3
+ * STEP 4: Insert Data into Supabase Database
+ * 
+ * Strategy:
+ * 1. For each landmark, INSERT into spots table
+ * 2. Get the landmark's ID
+ * 3. For each hotspot, INSERT into spots table
+ * 4. For each photo, INSERT into photos table (linked to hotspot)
+ * 5. Handle duplicates gracefully (don't fail if already exists)
+ */
+
+function getFlickrPhotoUrl(photo: FlickrPhoto, size: string = 'b'): string {
+  // Construct Flickr photo URL from components
+  // Size codes: s=small, m=medium, b=large, o=original
+  return `https://farm${photo.farm}.staticflickr.com/${photo.server}/${photo.id}_${photo.secret}_${size}.jpg`;
+}
+
+async function insertLandmarkAndHotspots(
+  supabase: any,
+  landmark: Landmark,
+  hotspots: Hotspot[]
+): Promise<{ landmarkId: string; hotspotIds: string[] }> {
+  console.log(`\n  💾 Inserting landmark: ${landmark.name}`);
+
+  try {
+    // STEP 4A: Calculate landmark center (average of all photo locations)
+    let avgLat = 0;
+    let avgLng = 0;
+    for (const photo of landmark.photos) {
+      const lat = typeof photo.latitude === 'string' ? parseFloat(photo.latitude) : photo.latitude;
+      const lng = typeof photo.longitude === 'string' ? parseFloat(photo.longitude) : photo.longitude;
+      avgLat += lat;
+      avgLng += lng;
+    }
+    avgLat /= landmark.photos.length;
+    avgLng /= landmark.photos.length;
+
+    // Get a cover photo URL
+    const coverPhotoUrl = getFlickrPhotoUrl(landmark.photos[0], 'b');
+
+    // STEP 4B: Check if landmark already exists
+    const { data: existingLandmark } = await supabase
+      .from('spots')
+      .select('id')
+      .eq('name', landmark.name)
+      .eq('source', 'flickr')
+      .single();
+
+    let landmarkId: string;
+
+    if (existingLandmark) {
+      // Landmark already exists, reuse it
+      landmarkId = (existingLandmark as any).id;
+      console.log(`    ✅ Landmark already exists: ${landmarkId}`);
+    } else {
+      // STEP 4C: Insert new landmark
+      const { data: newLandmark, error: landmarkError } = await supabase
+        .from('spots')
+        .insert({
+          name: landmark.name,
+          lat: avgLat,
+          lng: avgLng,
+          geom: `POINT(${avgLng} ${avgLat})`,  // PostGIS geometry: longitude first!
+          photo_url: coverPhotoUrl,
+          source: 'flickr',
+          score: Math.min(landmark.photoCount / 50, 1),
+          categories: ['landmark'],
+          description: `Landmark with ${landmark.photoCount} photos from Flickr`,
+        } as any)
+        .select('id')
+        .single();
+
+      if (landmarkError) {
+        console.error(`    ❌ Error inserting landmark: ${landmarkError.message}`);
+        throw landmarkError;
+      }
+
+      landmarkId = (newLandmark as any).id;
+      console.log(`    ✅ Inserted landmark: ${landmarkId}`);
+    }
+
+    // STEP 4D: Insert hotspots for this landmark
+    const hotspotIds: string[] = [];
+
+    for (const hotspot of hotspots) {
+      console.log(`    \n    📍 Inserting hotspot at (${hotspot.lat}, ${hotspot.lng})`);
+
+      // Check if hotspot already exists
+      const { data: existingHotspot } = await supabase
+        .from('spots')
+        .select('id')
+        .eq('lat', hotspot.lat)
+        .eq('lng', hotspot.lng)
+        .eq('source', 'flickr')
+        .single();
+
+      let hotspotId: string;
+
+      if (existingHotspot) {
+        hotspotId = (existingHotspot as any).id;
+        console.log(`      ✅ Hotspot already exists: ${hotspotId}`);
+      } else {
+        const coverPhoto = getFlickrPhotoUrl(hotspot.photos[0], 'b');
+
+        const { data: newHotspot, error: hotspotError } = await supabase
+          .from('spots')
+          .insert({
+            name: `Hotspot for ${landmark.name}`,
+            lat: hotspot.lat,
+            lng: hotspot.lng,
+            geom: `POINT(${hotspot.lng} ${hotspot.lat})`,  // PostGIS geometry: longitude first!
+            photo_url: coverPhoto,
+            source: 'flickr',
+            score: Math.min(hotspot.photoCount / 10, 1),
+            categories: ['hotspot'],
+            description: `${hotspot.photoCount} photos of ${landmark.name} taken from here`,
+          } as any)
+          .select('id')
+          .single();
+
+        if (hotspotError) {
+          console.error(`      ❌ Error inserting hotspot: ${hotspotError.message}`);
+          throw hotspotError;
+        }
+
+        hotspotId = (newHotspot as any).id;
+        console.log(`      ✅ Inserted hotspot: ${hotspotId}`);
+      }
+
+      hotspotIds.push(hotspotId);
+
+      // STEP 4E: Insert photos for this hotspot
+      await insertPhotosForHotspot(supabase, hotspotId, hotspot.photos);
+    }
+
+    return { landmarkId, hotspotIds };
+  } catch (error) {
+    console.error(`❌ Error inserting landmark data:`, error);
+    throw error;
+  }
+}
+
+async function insertPhotosForHotspot(
+  supabase: any,
+  hotspotId: string,
+  photos: FlickrPhoto[]
+): Promise<void> {
+  console.log(`      📸 Inserting ${photos.length} photos...`);
+
+  try {
+    // Build photo records
+    const photoRecords = photos.map(photo => ({
+      spot_id: hotspotId,
+      user_id: null,
+      original_key: `flickr:${photo.id}`,
+      variants: {
+        small: getFlickrPhotoUrl(photo, 's'),
+        medium: getFlickrPhotoUrl(photo, 'm'),
+        large: getFlickrPhotoUrl(photo, 'b'),
+        original: getFlickrPhotoUrl(photo, 'o'),
+      },
+      width: null,
+      height: null,
+      sha256: null,
+      visibility: 'public',
+    }));
+
+    // Check which photos already exist
+    const existingKeys = photos.map(p => `flickr:${p.id}`);
+    const { data: existingPhotos } = await supabase
+      .from('photos')
+      .select('original_key')
+      .eq('spot_id', hotspotId)
+      .in('original_key', existingKeys);
+
+    const existingSet = new Set(existingPhotos?.map((p: any) => p.original_key) || []);
+    const newPhotos = photoRecords.filter(p => !existingSet.has(p.original_key));
+
+    if (newPhotos.length === 0) {
+      console.log(`      ✅ All photos already exist`);
+      return;
+    }
+
+    // Insert new photos
+    const { error: photosError } = await supabase
+      .from('photos')
+      .insert(newPhotos as any);
+
+    if (photosError) {
+      console.error(`      ❌ Error inserting photos: ${photosError.message}`);
+      throw photosError;
+    }
+
+    console.log(`      ✅ Inserted ${newPhotos.length} new photos`);
+  } catch (error) {
+    console.error(`❌ Error inserting photos:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Main function - TEST ALL STEPS 1-4
  * Run this with: npx tsx src/scripts/seedPhotosByAkbar.ts
  */
 async function main() {
   try {
-    console.log('\n🚀 STEP 1, 2 & 3: Fetch, Identify Landmarks, Group into Hotspots\n');
+    console.log('\n🚀 STEP 1-4: Full Seed Pipeline\n');
 
-    // Toronto downtown
-    const lat = 43.6629;
-    const lng = -79.3957;
-    const radiusKm = 5;
+    const supabase = createClient(config.supabase.url, config.supabase.serviceKey);
 
-    // === STEP 1: Fetch Photos ===
-    const photos = await fetchFlickrPhotos(lat, lng, radiusKm);
-    console.log(`\n📸 Fetched ${photos.length} photos`);
-
-    // === STEP 2: Identify Landmarks ===
-    const landmarks = identifyLandmarks(photos, 10); // Keep landmarks with 10+ photos
-
-    // Display results
-    console.log('\n========== STEP 2 RESULTS: TOP LANDMARKS ==========\n');
-    
-    if (landmarks.length > 0) {
-      // Show all landmarks sorted by popularity
-      landmarks.forEach((landmark, index) => {
-        console.log(`${index + 1}. ${landmark.name.toUpperCase()}`);
-        console.log(`   � Photos: ${landmark.photoCount}`);
-        console.log(`   🏷️  Sample tags: ${landmark.photos[0].tags?.split(' ').slice(0, 5).join(', ') || 'none'}`);
-        console.log();
-      });
-    } else {
-      console.log('⚠️  No landmarks found with 10+ photos');
+    if (!config.supabase.url || !config.supabase.serviceKey) {
+      throw new Error('Supabase credentials not configured');
     }
 
-    // Summary
-    console.log('========== SUMMARY ==========');
-    console.log(`\n✅ STEP 1: Fetched ${photos.length} geotagged photos from Flickr`);
-    console.log(`✅ STEP 2: Identified ${landmarks.length} landmarks (tags with 10+ photos)`);
-    console.log('\nTop 5 Landmarks:');
-    landmarks.slice(0, 5).forEach((landmark, index) => {
-      console.log(`  ${index + 1}. ${landmark.name}: ${landmark.photoCount} photos`);
-    });
-    // === STEP 3: Group into Hotspots ===
-    console.log('\n========== STEP 3: Grouping into Hotspots ==========');
-    
+    const lat = 43.667713;
+    const lng = -79.394913;
+    const radiusKm = 5;
+
+    console.log('=== STEP 1: Fetching from Flickr ===');
+    const photos = await fetchFlickrPhotos(lat, lng, radiusKm);
+    console.log(`✅ Fetched ${photos.length} photos\n`);
+
+    console.log('=== STEP 2: Identifying Landmarks ===');
+    const landmarks = identifyLandmarks(photos, 10);
+    console.log(`✅ Identified ${landmarks.length} landmarks\n`);
+
+    if (landmarks.length === 0) {
+      console.log('⚠️  No landmarks found');
+      process.exit(0);
+    }
+
+    console.log('=== STEP 3: Grouping into Hotspots ===');
     const landmarkHotspots: Map<string, Hotspot[]> = new Map();
     
     for (const landmark of landmarks) {
@@ -338,38 +524,35 @@ async function main() {
         landmarkHotspots.set(landmark.name, hotspots);
       }
     }
+    console.log(`✅ Found hotspots\n`);
 
-    // Display results
-    console.log('\n========== STEP 3 RESULTS: LANDMARKS & HOTSPOTS ==========\n');
+    console.log('=== STEP 4: Inserting into Database ===');
+    let totalInserted = { landmarks: 0, hotspots: 0, photos: 0 };
 
-    let totalHotspots = 0;
-    
-    for (const [landmarkName, hotspots] of landmarkHotspots.entries()) {
-      console.log(`\n🏛️  ${landmarkName.toUpperCase()}`);
-      console.log(`   📊 Total photos: ${landmarks.find(l => l.name === landmarkName)?.photoCount}`);
-      console.log(`   📍 Hotspots found: ${hotspots.length}`);
+    for (const landmark of landmarks) {
+      const hotspots = landmarkHotspots.get(landmark.name) || [];
+      if (hotspots.length === 0) continue;
 
-      hotspots.slice(0, 5).forEach((hotspot, index) => {
-        console.log(`   \n   Hotspot ${index + 1}:`);
-        console.log(`     📍 Coordinates: (${hotspot.lat}, ${hotspot.lng})`);
-        console.log(`     📸 Photos: ${hotspot.photoCount}`);
-        console.log(`     🗺️  Map: https://maps.google.com/?q=${hotspot.lat},${hotspot.lng}`);
-      });
-
-      totalHotspots += hotspots.length;
+      try {
+        const result = await insertLandmarkAndHotspots(supabase, landmark, hotspots);
+        totalInserted.landmarks++;
+        totalInserted.hotspots += result.hotspotIds.length;
+        for (const hotspot of hotspots) {
+          totalInserted.photos += hotspot.photos.length;
+        }
+      } catch (error) {
+        console.error(`⚠️  Skipped ${landmark.name}`);
+      }
     }
 
-    // Summary
-    console.log('\n\n========== SUMMARY ==========');
-    console.log(`\n✅ STEP 1: Fetched ${photos.length} geotagged photos from Flickr`);
+    console.log('\n========== 🎉 COMPLETE! ==========');
+    console.log(`✅ STEP 1: Fetched ${photos.length} photos`);
     console.log(`✅ STEP 2: Identified ${landmarks.length} landmarks`);
-    console.log(`✅ STEP 3: Found ${totalHotspots} photography hotspots`);
-    console.log('\n📊 Data breakdown:');
-    if (landmarks.length > 0) {
-      console.log(`   - Photos per landmark: ${(photos.length / landmarks.length).toFixed(1)} avg`);
-      console.log(`   - Hotspots per landmark: ${(totalHotspots / landmarks.length).toFixed(1)} avg`);
-    }
-    console.log('\n✅ STEPS 1, 2 & 3 COMPLETE: Ready for STEP 4 (database insertion)');
+    console.log(`✅ STEP 3: Found hotspots`);
+    console.log(`✅ STEP 4: Database insertion complete`);
+    console.log(`\nDatabase Summary: ${totalInserted.landmarks} landmarks, ${totalInserted.hotspots} hotspots, ${totalInserted.photos} photos`);
+    console.log('\n✨ Done!');
+    process.exit(0);
 
   } catch (error) {
     console.error('\n❌ Test failed:', error);
