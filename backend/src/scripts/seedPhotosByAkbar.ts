@@ -61,7 +61,6 @@ interface FlickrResponse {
 }
 
 async function fetchFlickrPhotos(lat: number,lng: number, radiusKm: number = 5): Promise<FlickrPhoto[]> {
-  console.log(`\n📍 Fetching photos from Flickr for location: ${lat}, ${lng} (radius: ${radiusKm}km)`);
   
   // Get API key from config
   const apiKey = config.externalApis.flickr.apiKey;
@@ -90,7 +89,7 @@ async function fetchFlickrPhotos(lat: number,lng: number, radiusKm: number = 5):
   
    try {
     // STEP 1C: Make the actual HTTP request
-    console.log('Making request to Flickr API');
+    
     const response = await fetch(url.toString());
     
     // STEP 1D: Check if HTTP request was successful
@@ -108,7 +107,7 @@ async function fetchFlickrPhotos(lat: number,lng: number, radiusKm: number = 5):
 
     // STEP 1G: Extract photos from response
     const photos = data.photos.photo || [];
-    console.log(`✅ Successfully fetched ${photos.length} photos from Flickr`);
+    
     
     return photos;
 
@@ -136,7 +135,7 @@ interface Landmark {
 }
 
 function identifyLandmarks(photos: FlickrPhoto[], minPhotoCount: number = 10): Landmark[] {
-  console.log('\n📍 STEP 2: Identifying Landmarks...');
+  
   
   // STEP 2A: Create a map to count tags
   // This will look like: { "ROM": [photo1, photo2, photo3, ...], "CN Tower": [...] }
@@ -162,8 +161,7 @@ function identifyLandmarks(photos: FlickrPhoto[], minPhotoCount: number = 10): L
     }
   }
 
-  console.log(`\n📊 Found ${tagToPhotos.size} unique tags`);
-
+  
   // STEP 2C: Filter out generic/uninteresting tags
   const genericTags = new Set([
     'toronto', 'ontario', 'canada', // Location names
@@ -199,7 +197,6 @@ function identifyLandmarks(photos: FlickrPhoto[], minPhotoCount: number = 10): L
   // STEP 2E: Sort by photo count (most popular first)
   landmarks.sort((a, b) => b.photoCount - a.photoCount);
 
-  console.log(`✅ Identified ${landmarks.length} landmarks (with 10+ photos each)`);
   
   return landmarks;
 }
@@ -227,7 +224,7 @@ interface Hotspot {
 }
 
 function groupPhotosIntoHotspots(landmark: Landmark, minPhotosPerHotspot: number = 3): Hotspot[] {
-  console.log(`\n  📍 Grouping photos for landmark: ${landmark.name}`);
+  
 
   // STEP 3A: Define precision - round coordinates to 4 decimal places
   // This gives us ~11 meter accuracy (good for "same spot")
@@ -279,7 +276,7 @@ function groupPhotosIntoHotspots(landmark: Landmark, minPhotosPerHotspot: number
   // STEP 3E: Sort by popularity (most photographed first)
   hotspots.sort((a, b) => b.photoCount - a.photoCount);
 
-  console.log(`    ✅ Found ${hotspots.length} hotspots (${minPhotosPerHotspot}+ photos each)`);
+  
 
   return hotspots;
 }
@@ -301,12 +298,8 @@ function getFlickrPhotoUrl(photo: FlickrPhoto, size: string = 'b'): string {
   return `https://farm${photo.farm}.staticflickr.com/${photo.server}/${photo.id}_${photo.secret}_${size}.jpg`;
 }
 
-async function insertLandmarkAndHotspots(
-  supabase: any,
-  landmark: Landmark,
-  hotspots: Hotspot[]
-): Promise<{ landmarkId: string; hotspotIds: string[] }> {
-  console.log(`\n  💾 Inserting landmark: ${landmark.name}`);
+async function insertLandmarkAndHotspots(supabase: any, landmark: Landmark, hotspots: Hotspot[]): Promise<{ landmarkId: string; hotspotIds: string[] }> {
+  
 
   try {
     // STEP 4A: Calculate landmark center (average of all photo locations)
@@ -337,7 +330,7 @@ async function insertLandmarkAndHotspots(
     if (existingLandmark) {
       // Landmark already exists, reuse it
       landmarkId = (existingLandmark as any).id;
-      console.log(`    ✅ Landmark already exists: ${landmarkId}`);
+      
     } else {
       // STEP 4C: Insert new landmark
       const { data: newLandmark, error: landmarkError } = await supabase
@@ -362,14 +355,14 @@ async function insertLandmarkAndHotspots(
       }
 
       landmarkId = (newLandmark as any).id;
-      console.log(`    ✅ Inserted landmark: ${landmarkId}`);
+      
     }
 
     // STEP 4D: Insert hotspots for this landmark
     const hotspotIds: string[] = [];
 
     for (const hotspot of hotspots) {
-      console.log(`    \n    📍 Inserting hotspot at (${hotspot.lat}, ${hotspot.lng})`);
+      
 
       // Check if hotspot already exists
       const { data: existingHotspot } = await supabase
@@ -384,7 +377,7 @@ async function insertLandmarkAndHotspots(
 
       if (existingHotspot) {
         hotspotId = (existingHotspot as any).id;
-        console.log(`      ✅ Hotspot already exists: ${hotspotId}`);
+        
       } else {
         const coverPhoto = getFlickrPhotoUrl(hotspot.photos[0], 'b');
 
@@ -410,7 +403,6 @@ async function insertLandmarkAndHotspots(
         }
 
         hotspotId = (newHotspot as any).id;
-        console.log(`      ✅ Inserted hotspot: ${hotspotId}`);
       }
 
       hotspotIds.push(hotspotId);
@@ -431,7 +423,6 @@ async function insertPhotosForHotspot(
   hotspotId: string,
   photos: FlickrPhoto[]
 ): Promise<void> {
-  console.log(`      📸 Inserting ${photos.length} photos...`);
 
   try {
     // Build photo records
@@ -463,7 +454,7 @@ async function insertPhotosForHotspot(
     const newPhotos = photoRecords.filter(p => !existingSet.has(p.original_key));
 
     if (newPhotos.length === 0) {
-      console.log(`      ✅ All photos already exist`);
+      
       return;
     }
 
@@ -477,7 +468,7 @@ async function insertPhotosForHotspot(
       throw photosError;
     }
 
-    console.log(`      ✅ Inserted ${newPhotos.length} new photos`);
+    
   } catch (error) {
     console.error(`❌ Error inserting photos:`, error);
     throw error;
@@ -560,5 +551,14 @@ async function main() {
   }
 }
 
-// Run the main function
+// Export functions for API endpoint integration
+export {
+  fetchFlickrPhotos,
+  identifyLandmarks,
+  groupPhotosIntoHotspots,
+  insertLandmarkAndHotspots,
+  insertPhotosForHotspot,
+};
+
+// Run the main function only if executed directly
 main();
