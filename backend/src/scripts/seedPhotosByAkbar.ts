@@ -82,7 +82,9 @@ async function fetchFlickrPhotos(lat: number,lng: number, radiusKm: number = 5):
   url.searchParams.append('has_geo', '1'); // IMPORTANT: Only geotagged photos
   url.searchParams.append('accuracy', '16'); // Street-level accuracy
   url.searchParams.append('extras', 'geo,url_b,tags'); // Include geo coords, URLs, and tags
-  url.searchParams.append('per_page', '250'); // Get up to 250 photos
+  url.searchParams.append('per_page', '250'); // Get more photos for better data
+  url.searchParams.append('sort', 'interestingness-desc'); // Sort by most interesting, NOT recency
+  url.searchParams.append('content_type', '1'); // Photos only (exclude screenshots/graphics)
   url.searchParams.append('format', 'json');
   url.searchParams.append('nojsoncallback', '1'); // Return pure JSON, not wrapped in callback
 
@@ -164,26 +166,100 @@ function identifyLandmarks(photos: FlickrPhoto[], minPhotoCount: number = 10): L
   
   // STEP 2C: Filter out generic/uninteresting tags
   const genericTags = new Set([
-    'toronto', 'ontario', 'canada', // Location names
-    'photo', 'image', 'picture', 'photo', 'photooftheday', // Generic photo terms
-    'camera', 'canon', 'nikon', 'sony', 'pentax', // Camera brands
-    '2024', '2023', '2022', '2021','2025', '2020', '2019', // Years
-    'the', 'a', 'an', 'and', 'or', 'in', 'at', 'on', // Articles/prepositions
-    'streetphotography', 'street', 'urban', 'city', 'downtown', // Too generic
-    'outdoor', 'outdoors', 'indoor', 'indoors', 'construction', 'torontoontario', // Too generic
-    'fair', 'festival', 'event', 'night', 'day', // Time/events
-    'window', 'windowdisplay', 'display', 'shop', 'store', 'bloor', 'street', // Generic locations
+    // Location names
+    'toronto', 'ontario', 'canada', 'scarborough', 'scarboroughontario', 'torontoontario',
+    'northyork', 'etobicoke', 'mississauga', 'markham', 'vaughan', 'torontocanada',
+    
+    // Generic photo/tech terms
+    'photo', 'image', 'picture', 'photooftheday', 'photography', 'photographer',
+    'phone', 'iphone', 'samsung', 'mobile', 'cellphone', 'smartphone',
+    'camera', 'canon', 'nikon', 'sony', 'pentax', 'fuji', 'fujifilm', 'olympus',
+    'lens', 'dslr', 'mirrorless', 'pro', 'promax', '17promax', '15promax', '14promax',
+    
+    // Years & dates
+    '2024', '2023', '2022', '2021', '2025', '2020', '2019', '2018', '2017', '2016',
+    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+    'september', 'october', 'november', 'december',
+    
+    // Generic descriptors
+    'the', 'a', 'an', 'and', 'or', 'in', 'at', 'on', 'of', 'for', 'with',
+    
+    // Generic urban/location types
+    'streetphotography', 'street', 'urban', 'city', 'downtown', 'uptown', 'midtown',
+    'outdoor', 'outdoors', 'indoor', 'indoors', 'outside', 'inside',
+    'building', 'buildings', 'architecture', 'construction', 'torontoconstruction',
+    'skyscraper', 'highrise', 'tower', 'towers', 'supertall', 'supertallskyscraper',
+    'supertallbuilding', 'skygrid', 'condo', 'condos', 'apartment', 'apartments',
+    
+    // Generic activities/objects
+    'food', 'drink', 'coffee', 'restaurant', 'cafe', 'dining',
+    'shopping', 'shop', 'store', 'shops', 'stores', 'retail',
+    'window', 'windowdisplay', 'display', 'sign', 'signage',
+    'art', 'mural', 'graffiti', 'sculpture', 'statue',
+    'people', 'person', 'crowd', 'crowds', 'man', 'woman', 'child',
+    
+    // Generic events/times (EXPANDED - these capture protests, rallies, etc.)
+    'fair', 'festival', 'event', 'concert', 'show', 'exhibition',
+    'protest', 'rally', 'demonstration', 'march', 'parade',
+    'night', 'day', 'morning', 'afternoon', 'evening', 'sunset', 'sunrise',
+    'summer', 'winter', 'spring', 'fall', 'autumn',
+    
+    // Transit (too generic - EXPANDED)
+    'transit', 'ttc', 'subway', 'bus', 'streetcar', 'train', 'tram',
+    'torontotransit', 'metrolinx', 'gotransit', 'line1', 'line2',
+    'flexity', 'bombardier', 'ttcflexity', 'lrv', 'fleet', // Filter out streetcar models
+    
+    // Generic street names (add specific ones you see)
+    'bloor', 'yonge', 'queen', 'king', 'dundas', 'college', 'wellesley',
+    'bay', 'university', 'spadina', 'bathurst',
+    
+    // Developer/company names (not landmarks)
+    'tridel', 'mizrahi', 'mizrahidevelopments', 'cadillacfairview',
+    
+    // Colors and basic descriptors
+    'red', 'blue', 'green', 'yellow', 'black', 'white', 'grey', 'gray',
+    'new', 'old', 'modern', 'historic', 'contemporary', 'vintage',
+    
+    // Generic photo subjects
+    'selfportrait', 'selfie', 'portrait', 'pattern', 'light', 'shadow',
+    'reflection', 'abstract', 'detail', 'texture', 'perspective',
   ]);
 
   // STEP 2D: Convert to landmarks (keep only significant tags)
   const landmarks: Landmark[] = [];
   
   for (const [tag, photoList] of tagToPhotos.entries()) {
-    // Skip if:
-    // - Tag is in generic list
-    // - Tag appears in fewer than minPhotoCount photos
-    // - Tag is too short (probably not a landmark)
-    if (genericTags.has(tag.toLowerCase()) || photoList.length < minPhotoCount || tag.length < 3) {
+    const tagLower = tag.toLowerCase();
+    
+    // Skip if tag is generic
+    if (genericTags.has(tagLower)) {
+      continue;
+    }
+    
+    // Skip if tag is too short (likely abbreviation or noise)
+    if (tag.length < 3) {
+      continue;
+    }
+    
+    // Skip if tag is too long (likely concatenated noise like "metrolinx6200bombardier...")
+    if (tag.length > 30) {
+      continue;
+    }
+    
+    // Skip if tag contains numbers (likely model numbers, addresses, etc.)
+    if (/\d{3,}/.test(tag)) { // 3+ consecutive digits
+      continue;
+    }
+    
+    // Skip if tag has weird casing patterns (likely concatenated tags)
+    // e.g., "oneBloorWest" has multiple capitals
+    const capitalCount = (tag.match(/[A-Z]/g) || []).length;
+    if (capitalCount > 2) {
+      continue;
+    }
+    
+    // Skip if not enough photos (increase threshold for better quality)
+    if (photoList.length < minPhotoCount) {
       continue;
     }
     
@@ -489,19 +565,19 @@ async function main() {
       throw new Error('Supabase credentials not configured');
     }
 
-    const lat = 43.788775;
-    const lng = -79.256900;
-    const radiusKm = 5;
+    const lat = 51.507351;
+    const lng = -0.127758;
+    const radiusKm = 1;
 
     console.log('=== STEP 1: Fetching from Flickr ===');
     const photos = await fetchFlickrPhotos(lat, lng, radiusKm);
     console.log(`✅ Fetched ${photos.length} photos\n`);
 
     console.log('=== STEP 2: Identifying Landmarks ===');
-    const landmarks = identifyLandmarks(photos, 10);
+    const landmarks = identifyLandmarks(photos, 15); // Increased from 10 to 15 for better quality
     console.log(`✅ Identified ${landmarks.length} landmarks`);
     if (landmarks.length > 0) {
-      console.log(`   📍 ${landmarks.map(l => l.name).join(', ')}\n`);
+      console.log(`   📍 ${landmarks.map(l => `${l.name} (${l.photoCount})`).join(', ')}\n`);
     } else {
       console.log();
     }

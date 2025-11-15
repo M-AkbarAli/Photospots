@@ -14,9 +14,7 @@ curl "http://localhost:3000/v1/spots/nearby?lat=43.6629&lng=-79.3957&radius=5000
 
 # Copy a landmark ID from the response, then:
 LANDMARK_ID="4570849b-9827-45b5-bbf5-9aec135c8b91"
-
-# Fetch hotspots for that landmark
-curl "http://localhost:3000/v1/spots/$LANDMARK_ID/hotspots" | jq
+curl "http://localhost:3000/v1/spots/c23e7bcc-f337-4928-b458-e8f07ff233f4/hotspots" | jq
 ```
 
 **Response:**
