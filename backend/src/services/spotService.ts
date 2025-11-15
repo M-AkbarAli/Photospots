@@ -19,7 +19,7 @@ export class SpotService {
       return cached;
     }
 
-    // Call RPC function
+    // Call RPC function ()
     const { data, error } = await supabase.rpc('api_spots_nearby', {
       // map API params to SQL function param names
       search_lat: lat,

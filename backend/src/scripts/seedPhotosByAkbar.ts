@@ -489,8 +489,8 @@ async function main() {
       throw new Error('Supabase credentials not configured');
     }
 
-    const lat = 43.667713;
-    const lng = -79.394913;
+    const lat = 43.788775;
+    const lng = -79.256900;
     const radiusKm = 5;
 
     console.log('=== STEP 1: Fetching from Flickr ===');
@@ -499,7 +499,12 @@ async function main() {
 
     console.log('=== STEP 2: Identifying Landmarks ===');
     const landmarks = identifyLandmarks(photos, 10);
-    console.log(`✅ Identified ${landmarks.length} landmarks\n`);
+    console.log(`✅ Identified ${landmarks.length} landmarks`);
+    if (landmarks.length > 0) {
+      console.log(`   📍 ${landmarks.map(l => l.name).join(', ')}\n`);
+    } else {
+      console.log();
+    }
 
     if (landmarks.length === 0) {
       console.log('⚠️  No landmarks found');
@@ -541,6 +546,10 @@ async function main() {
     console.log(`✅ STEP 2: Identified ${landmarks.length} landmarks`);
     console.log(`✅ STEP 3: Found hotspots`);
     console.log(`✅ STEP 4: Database insertion complete`);
+    console.log('Hotspot details:');
+    for (const [landmarkName, hotspots] of landmarkHotspots.entries()) {
+      console.log(`- ${landmarkName}: ${hotspots.length} hotspots`);
+    }
     console.log(`\nDatabase Summary: ${totalInserted.landmarks} landmarks, ${totalInserted.hotspots} hotspots, ${totalInserted.photos} photos`);
     console.log('\n✨ Done!');
     process.exit(0);
