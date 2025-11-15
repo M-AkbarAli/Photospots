@@ -4,6 +4,7 @@ import { isValidCoordinate } from '../../utils/geospatial.js';
 import { requireAuth } from '../middlewares/auth.js';
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../../config/index.js';
+import { getCache, setCache, CACHE_TTL } from '../../utils/cache.js';
 
 const router = Router();
 const spotService = new SpotService();
@@ -192,6 +193,14 @@ router.get('/:landmarkId/hotspots', async (req: Request, res: Response): Promise
   try {
     const { landmarkId } = req.params;
 
+    // Check cache first
+    const cacheKey = `hotspots:${landmarkId}`;
+    const cached = await getCache<any>(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
     // First, get the landmark details
     const { data: landmark, error: landmarkError } = await supabase
       .from('spots')
@@ -231,7 +240,7 @@ router.get('/:landmarkId/hotspots', async (req: Request, res: Response): Promise
       s.categories?.includes('hotspot') && s.id !== landmarkId
     );
 
-    res.json({
+    const response = {
       success: true,
       landmark: {
         id: landmarkId,
@@ -239,7 +248,12 @@ router.get('/:landmarkId/hotspots', async (req: Request, res: Response): Promise
       },
       count: filteredHotspots.length,
       hotspots: filteredHotspots,
-    });
+    };
+
+    // Cache the result (5 minutes TTL)
+    await setCache(cacheKey, response, CACHE_TTL.NEARBY_SPOTS);
+
+    res.json(response);
   } catch (error) {
     console.error('Error fetching hotspots:', error);
     res.status(500).json({ 
@@ -263,6 +277,14 @@ router.get('/:spotId/photos', async (req: Request, res: Response): Promise<void>
   try {
     const { spotId } = req.params;
 
+    // Check cache first
+    const cacheKey = `photos:${spotId}`;
+    const cached = await getCache<any>(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
     // Fetch all public photos for this spot
     const { data: photos, error } = await supabase
       .from('photos')
@@ -280,11 +302,16 @@ router.get('/:spotId/photos', async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    res.json({
+    const response = {
       success: true,
       count: photos?.length || 0,
       photos: photos || [],
-    });
+    };
+
+    // Cache the result (10 minutes TTL)
+    await setCache(cacheKey, response, CACHE_TTL.SPOT_DETAIL);
+
+    res.json(response);
   } catch (error) {
     console.error('Error fetching photos:', error);
     res.status(500).json({ 
