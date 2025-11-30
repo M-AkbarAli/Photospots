@@ -1,6 +1,8 @@
 import Foundation
 import MapKit
 import CoreLocation
+import SwiftUI
+import Combine
 
 @MainActor
 class MapViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
