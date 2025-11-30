@@ -12,7 +12,7 @@ struct TabTwoView: View {
             Divider()
                 .padding(.vertical)
             
-            Text("This is a SIMGA to see if this makes a difference!")
+            Text("This is a LIGMA to see if this makes a difference!")
                 .foregroundColor(.secondary)
         }
     }

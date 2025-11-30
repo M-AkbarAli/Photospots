@@ -38,7 +38,7 @@ struct BottomSheetView: View {
                     Spacer()
                 }
                 .padding()
-                .background(Color(.systemGray6))
+                .background(Color.gray.opacity(0.1))
                 .cornerRadius(10)
                 .padding(.horizontal)
                 .padding(.bottom, 20)
@@ -74,7 +74,7 @@ struct BottomSheetView: View {
                 }
             }
             .background(Color.white)
-            .cornerRadius(20, corners: [.topLeft, .topRight])
+            .clipShape(TopRoundedRectangle(radius: 20))
             .shadow(radius: 10)
             .frame(height: geometry.size.height * 0.8) // Max height
             .offset(y: max(geometry.size.height * 0.4 + offset, geometry.size.height * 0.1)) // Min height (collapsed) vs Max (expanded) logic needs refinement, simplified for now
@@ -98,19 +98,23 @@ struct BottomSheetView: View {
     }
 }
 
-// Helper for rounded corners
-extension View {
-    func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
-        clipShape(RoundedCorner(radius: radius, corners: corners))
-    }
-}
-
-struct RoundedCorner: Shape {
-    var radius: CGFloat = .infinity
-    var corners: UIRectCorner = .allCorners
-
+struct TopRoundedRectangle: Shape {
+    var radius: CGFloat
+    
     func path(in rect: CGRect) -> Path {
-        let path = UIBezierPath(roundedRect: rect, byRoundingCorners: corners, cornerRadii: CGSize(width: radius, height: radius))
-        return Path(path.cgPath)
+        var path = Path()
+        let w = rect.width
+        let h = rect.height
+        let r = min(min(radius, h/2), w/2)
+        
+        path.move(to: CGPoint(x: w, y: h))
+        path.addLine(to: CGPoint(x: 0, y: h))
+        path.addLine(to: CGPoint(x: 0, y: r))
+        path.addRelativeArc(center: CGPoint(x: r, y: r), radius: r, startAngle: .degrees(180), delta: .degrees(90))
+        path.addLine(to: CGPoint(x: w - r, y: 0))
+        path.addRelativeArc(center: CGPoint(x: w - r, y: r), radius: r, startAngle: .degrees(270), delta: .degrees(90))
+        path.closeSubpath()
+        
+        return path
     }
 }
