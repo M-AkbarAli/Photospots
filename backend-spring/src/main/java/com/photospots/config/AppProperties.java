@@ -8,9 +8,14 @@ import org.springframework.context.annotation.Configuration;
 public class AppProperties {
 
     private final Cache cache = new Cache();
+    private final RateLimit rateLimit = new RateLimit();
 
     public Cache getCache() {
         return cache;
+    }
+
+    public RateLimit getRateLimit() {
+        return rateLimit;
     }
 
     public static class Cache {
@@ -58,6 +63,27 @@ public class AppProperties {
 
         public void setPhotosSeconds(int photosSeconds) {
             this.photosSeconds = photosSeconds;
+        }
+    }
+
+    public static class RateLimit {
+        private long windowMs = 900_000; // 15 minutes
+        private int maxRequests = 100;
+
+        public long getWindowMs() {
+            return windowMs;
+        }
+
+        public void setWindowMs(long windowMs) {
+            this.windowMs = windowMs;
+        }
+
+        public int getMaxRequests() {
+            return maxRequests;
+        }
+
+        public void setMaxRequests(int maxRequests) {
+            this.maxRequests = maxRequests;
         }
     }
 }

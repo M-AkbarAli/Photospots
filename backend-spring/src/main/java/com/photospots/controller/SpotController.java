@@ -60,7 +60,6 @@ public class SpotController {
 
     @PostMapping
     public ResponseEntity<?> create(@RequestBody @NotNull SpotDto request) {
-        // TODO: protect with JWT auth once wired
         SpotDto created = spotService.create(request);
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(created));
     }

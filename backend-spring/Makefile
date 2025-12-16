@@ -3,7 +3,7 @@
 # Start backend with hot reload (auto-restarts on file changes)
 # Stop with Ctrl+C
 dev:
-	mvn spring-boot:run
+	@./run-dev.sh
 
 # Build the application into a JAR
 build:
