@@ -1,13 +1,14 @@
 package com.photospots;
 
-import com.photospots.service.FlickrSeedService;
-import com.photospots.service.Hotspot;
-import com.photospots.service.Landmark;
+import java.util.List;
+
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
+import com.photospots.service.FlickrSeedService;
+import com.photospots.service.Hotspot;
+import com.photospots.service.Landmark;
 
 @Component
 public class SeedPhotosRunner implements ApplicationRunner {
@@ -83,7 +84,8 @@ public class SeedPhotosRunner implements ApplicationRunner {
                         totalPhotos += hotspot.getPhotos().size();
                     }
                 } catch (Exception e) {
-                    System.err.println("⚠️  Skipped " + landmark.getName());
+                    System.err.println("⚠️  Skipped " + landmark.getName() + ": " + e.getMessage());
+                    e.printStackTrace();
                 }
             }
 
