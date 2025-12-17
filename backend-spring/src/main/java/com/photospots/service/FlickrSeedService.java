@@ -1,22 +1,73 @@
 package com.photospots.service;
 
-import io.github.cdimascio.dotenv.Dotenv;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestTemplate;
 
+import io.github.cdimascio.dotenv.Dotenv;
+
+/**
+ * Service for seeding photo spots from Flickr API.
+ * 
+ * Strategy (from seedscript.md):
+ * 1. Search by text (place name) for relevance
+ * 2. Search by text sorted by interestingness for quality
+ * 3. Optionally search within Flickr groups
+ * 4. Merge results and remove duplicates by photo ID
+ * 5. Filter for quality (resolution, geo data)
+ * 6. Store in database
+ */
 @Service
 public class FlickrSeedService {
 
+    /**
+     * Result of seeding a location.
+     */
+    public static class SeedResult {
+        private final String locationName;
+        private final int totalPhotos;
+        private final int insertedPhotos;
+
+        public SeedResult(String locationName, int totalPhotos, int insertedPhotos) {
+            this.locationName = locationName;
+            this.totalPhotos = totalPhotos;
+            this.insertedPhotos = insertedPhotos;
+        }
+
+        public String getLocationName() {
+            return locationName;
+        }
+
+        public int getTotalPhotos() {
+            return totalPhotos;
+        }
+
+        public int getInsertedPhotos() {
+            return insertedPhotos;
+        }
+    }
+    private static final String FLICKR_API_BASE = "https://api.flickr.com/services/rest/";
+    private static final String EXTRAS = "url_l,url_o,url_z,url_c,url_b,geo,owner_name,views,tags";
+    private static final int PER_PAGE = 100;
+    private static final int MIN_RESOLUTION = 800;
+
+    private static final long REQUEST_DELAY_MS = 500; // 0.5 seconds between requests
+
+    // Toronto Flickr Group ID (optional enhancement)
+    private static final String TORONTO_GROUP_ID = "36521959@N00"; // Toronto Pool group
     private final RestTemplate restTemplate;
+
     private final JdbcTemplate jdbcTemplate;
 
     @Value("${flickr.api-key:}")
@@ -33,269 +84,349 @@ public class FlickrSeedService {
     }
 
     /**
-     * STEP 1: Fetch photos from Flickr API
+     * Main entry point: Seed photos for a target location.
+     * Follows the seedscript.md strategy closely.
      */
-    public List<FlickrPhoto> fetchFlickrPhotos(double lat, double lng, int radiusKm) throws Exception {
+    public SeedResult seedLocation(TargetLocation location) throws Exception {
         String apiKey = resolveValue(flickrApiKey, "FLICKR_API_KEY");
         if (!StringUtils.hasText(apiKey)) {
             throw new Exception("FLICKR_API_KEY is not set in environment");
         }
-        resolveValue(flickrApiSecret, "FLICKR_API_SECRET"); // ensure secret presence if needed
 
-        String url = String.format(
-            "https://api.flickr.com/services/rest/" +
-            "?method=flickr.photos.search" +
-            "&api_key=%s" +
-            "&lat=%f" +
-            "&lon=%f" +
-            "&radius=%d" +
-            "&radius_units=km" +
-            "&has_geo=1" +
-            "&accuracy=16" +
-            "&extras=geo,url_b,tags" +
-            "&per_page=250" +
-            "&sort=interestingness-desc" +
-            "&content_type=1" +
-            "&format=json" +
-            "&nojsoncallback=1",
-            apiKey, lat, lng, radiusKm
-        );
+        System.out.println("   📍 Processing: " + location.getName());
 
-        try {
-            FlickrResponse response = restTemplate.getForObject(url, FlickrResponse.class);
-            if (response == null || !"ok".equals(response.getStat())) {
-                throw new Exception("Flickr API error: " + (response != null ? response.getStat() : "null response"));
+        Set<String> seenPhotoIds = new HashSet<>();
+        List<FlickrPhoto> allPhotos = new ArrayList<>();
+
+        // STEP 1: Search by relevance (text search with location name)
+        System.out.println("      🔍 Searching by relevance...");
+        List<FlickrPhoto> relevancePhotos = searchPhotos(apiKey, location, "relevance");
+        int relevanceCount = addUniquePhotos(relevancePhotos, allPhotos, seenPhotoIds);
+        System.out.println("         Found " + relevancePhotos.size() + " photos, " + relevanceCount + " unique");
+        
+        rateLimitDelay();
+
+        // STEP 2: Search by interestingness
+        System.out.println("      ⭐ Searching by interestingness...");
+        List<FlickrPhoto> interestingPhotos = searchPhotos(apiKey, location, "interestingness-desc");
+        int interestingCount = addUniquePhotos(interestingPhotos, allPhotos, seenPhotoIds);
+        System.out.println("         Found " + interestingPhotos.size() + " photos, " + interestingCount + " unique");
+
+        rateLimitDelay();
+
+        // STEP 3: Search alternate names if provided
+        if (location.getAlternateNames() != null && location.getAlternateNames().length > 0) {
+            for (String altName : location.getAlternateNames()) {
+                System.out.println("      🔄 Searching alternate name: " + altName);
+                TargetLocation altLocation = new TargetLocation(altName, 
+                    location.getLatitude(), location.getLongitude(), location.getRadiusKm());
+                List<FlickrPhoto> altPhotos = searchPhotos(apiKey, altLocation, "relevance");
+                int altCount = addUniquePhotos(altPhotos, allPhotos, seenPhotoIds);
+                System.out.println("         Found " + altPhotos.size() + " photos, " + altCount + " unique");
+                rateLimitDelay();
             }
-            return response.getPhotos() != null ? response.getPhotos().getPhoto() : new ArrayList<>();
-        } catch (Exception e) {
-            System.err.println("❌ Error fetching from Flickr: " + e.getMessage());
-            throw e;
         }
+
+        // STEP 4: Optionally search Toronto group (if location is in GTA)
+        if (isInTorontoArea(location)) {
+            System.out.println("      🏙️ Searching Toronto Flickr group...");
+            List<FlickrPhoto> groupPhotos = searchGroup(apiKey, location.getName(), TORONTO_GROUP_ID);
+            int groupCount = addUniquePhotos(groupPhotos, allPhotos, seenPhotoIds);
+            System.out.println("         Found " + groupPhotos.size() + " photos, " + groupCount + " unique");
+            rateLimitDelay();
+        }
+
+        // STEP 5: Filter for quality
+        System.out.println("      🔧 Filtering for quality...");
+        List<FlickrPhoto> qualityPhotos = filterForQuality(allPhotos);
+        System.out.println("         After filtering: " + qualityPhotos.size() + " photos");
+
+        if (qualityPhotos.isEmpty()) {
+            System.out.println("      ⚠️ No quality photos found for " + location.getName());
+            return new SeedResult(location.getName(), 0, 0);
+        }
+
+        // STEP 6: Insert into database
+        System.out.println("      💾 Inserting into database...");
+        int insertedCount = insertLocationWithPhotos(location, qualityPhotos);
+        System.out.println("      ✅ Inserted " + insertedCount + " photos for " + location.getName());
+
+        return new SeedResult(location.getName(), qualityPhotos.size(), insertedCount);
     }
 
     /**
-     * STEP 2: Identify Landmarks by Analyzing Tags
+     * Insert a location and its photos into the database.
      */
-    public List<Landmark> identifyLandmarks(List<FlickrPhoto> photos, int minPhotoCount) {
-        Map<String, List<FlickrPhoto>> tagToPhotos = new HashMap<>();
+    @Transactional
+    public int insertLocationWithPhotos(TargetLocation location, List<FlickrPhoto> photos) throws Exception {
+        if (photos.isEmpty()) return 0;
 
-        // Build tag map
-        for (FlickrPhoto photo : photos) {
-            if (photo.getTags() == null || photo.getTags().isEmpty()) {
-                continue;
-            }
-            String[] tags = photo.getTags().split(" ");
-            for (String tag : tags) {
-                if (tag.isEmpty()) {
-                    continue;
-                }
-                tagToPhotos.computeIfAbsent(tag, k -> new ArrayList<>()).add(photo);
-            }
-        }
-
-        // Generic tags to filter
-        Set<String> genericTags = getGenericTags();
-
-        // Filter and convert to landmarks
-        List<Landmark> landmarks = new ArrayList<>();
-        for (Map.Entry<String, List<FlickrPhoto>> entry : tagToPhotos.entrySet()) {
-            String tag = entry.getKey();
-            List<FlickrPhoto> photoList = entry.getValue();
-
-            String tagLower = tag.toLowerCase();
-            if (genericTags.contains(tagLower)) {
-                continue;
-            }
-            if (tag.length() < 3 || tag.length() > 30) {
-                continue;
-            }
-            if (tag.matches(".*\\d{3,}.*")) { // Contains 3+ consecutive digits
-                continue;
-            }
-            long capitalCount = tag.chars().filter(Character::isUpperCase).count();
-            if (capitalCount > 2) {
-                continue;
-            }
-            if (photoList.size() < minPhotoCount) {
-                continue;
-            }
-
-            landmarks.add(new Landmark(tag, photoList.size(), photoList));
-        }
-
-        // Sort by photo count
-        landmarks.sort((a, b) -> Integer.compare(b.getPhotoCount(), a.getPhotoCount()));
-        return landmarks;
-    }
-
-    /**
-     * STEP 3: Group Photos into Hotspots by Location
-     */
-    public List<Hotspot> groupPhotosIntoHotspots(Landmark landmark, int minPhotosPerHotspot) {
-        final int PRECISION = 4;
-        Map<String, List<FlickrPhoto>> hotspotMap = new HashMap<>();
-
-        // Group by location
-        for (FlickrPhoto photo : landmark.getPhotos()) {
-            if (photo.getLatitude() == 0 || photo.getLongitude() == 0) {
-                continue;
-            }
-            double lat = photo.getLatitude();
-            double lng = photo.getLongitude();
-            String key = String.format("%." + PRECISION + "f,%." + PRECISION + "f", lat, lng);
-
-            hotspotMap.computeIfAbsent(key, k -> new ArrayList<>()).add(photo);
-        }
-
-        // Convert to hotspots
-        List<Hotspot> hotspots = new ArrayList<>();
-        for (Map.Entry<String, List<FlickrPhoto>> entry : hotspotMap.entrySet()) {
-            List<FlickrPhoto> photos = entry.getValue();
-            if (photos.size() < minPhotosPerHotspot) {
-                continue;
-            }
-            String[] coords = entry.getKey().split(",");
-            double lat = Double.parseDouble(coords[0]);
-            double lng = Double.parseDouble(coords[1]);
-            hotspots.add(new Hotspot(lat, lng, photos.size(), photos));
-        }
-
-        // Sort by popularity
-        hotspots.sort((a, b) -> Integer.compare(b.getPhotoCount(), a.getPhotoCount()));
-        return hotspots;
-    }
-
-    /**
-     * STEP 4: Insert Data into Supabase Database
-     */
-    public void insertLandmarkAndHotspots(Landmark landmark, List<Hotspot> hotspots) throws Exception {
-        // Calculate landmark center
+        // Calculate average coordinates from photos for location center
         double avgLat = 0, avgLng = 0;
-        for (FlickrPhoto photo : landmark.getPhotos()) {
+        for (FlickrPhoto photo : photos) {
             avgLat += photo.getLatitude();
             avgLng += photo.getLongitude();
         }
-        avgLat /= landmark.getPhotos().size();
-        avgLng /= landmark.getPhotos().size();
+        avgLat /= photos.size();
+        avgLng /= photos.size();
 
-        String coverUrl = getFlickrPhotoUrl(landmark.getPhotos().get(0), "b");
+        // Use location coordinates if provided, otherwise use photo average
+        double spotLat = location.hasCoordinates() ? location.getLatitude() : avgLat;
+        double spotLng = location.hasCoordinates() ? location.getLongitude() : avgLng;
 
-        // Check if landmark exists
-        String checkSql = "select id from spots where name = ? and source = ? limit 1";
-        List<String> existing = jdbcTemplate.query(checkSql, 
-            (rs, rowNum) -> rs.getString("id"), 
-            landmark.getName(), "flickr");
+        // Get the best photo as cover (first one, assuming sorted by relevance/quality)
+        String coverUrl = photos.get(0).getBestUrl();
 
-        String landmarkId;
+        // Check if spot already exists
+        String checkSql = "SELECT id FROM spots WHERE name = ? AND source = 'flickr' LIMIT 1";
+        List<String> existing = jdbcTemplate.query(checkSql,
+            (rs, rowNum) -> rs.getString("id"),
+            location.getName());
+
+        String spotId;
         if (!existing.isEmpty()) {
-            landmarkId = existing.get(0);
+            spotId = existing.get(0);
+            System.out.println("         📝 Spot exists, updating photos...");
         } else {
-            // Insert landmark
-            String insertSql = 
-                "insert into spots (name, lat, lng, geom, photo_url, source, score, categories, description) " +
-                "values (?, ?, ?, st_geomfromtext(?, 4326), ?, ?, ?, array[?], ?) " +
-                "returning id";
-            
+            // Insert new spot
+            String insertSql =
+                "INSERT INTO spots (name, lat, lng, geom, photo_url, source, score, categories, description) " +
+                "VALUES (?, ?, ?, ST_GeomFromText(?, 4326), ?, 'flickr', ?, ARRAY['landmark'], ?) " +
+                "RETURNING id";
+
+            double score = Math.min((double) photos.size() / 50.0, 1.0);
+            String description = "Photo spot with " + photos.size() + " photos from Flickr";
+
             List<String> result = jdbcTemplate.query(insertSql,
                 (rs, rowNum) -> rs.getString("id"),
-                landmark.getName(),
-                avgLat,
-                avgLng,
-                String.format("POINT(%f %f)", avgLng, avgLat),
+                location.getName(),
+                spotLat,
+                spotLng,
+                String.format("POINT(%f %f)", spotLng, spotLat),
                 coverUrl,
-                "flickr",
-                Math.min((double) landmark.getPhotoCount() / 50, 1.0),
-                "landmark",
-                "Landmark with " + landmark.getPhotoCount() + " photos from Flickr"
-            );
-            landmarkId = result.isEmpty() ? null : result.get(0);
+                score,
+                description);
+
+            spotId = result.isEmpty() ? null : result.get(0);
         }
 
-        // Insert hotspots
-        for (Hotspot hotspot : hotspots) {
-            String checkHotspot = "select id from spots where lat = ? and lng = ? and source = ? limit 1";
-            List<String> existingHotspot = jdbcTemplate.query(checkHotspot,
-                (rs, rowNum) -> rs.getString("id"),
-                hotspot.getLat(),
-                hotspot.getLng(),
-                "flickr");
+        if (spotId == null) {
+            return 0;
+        }
 
-            String hotspotId;
-            if (!existingHotspot.isEmpty()) {
-                hotspotId = existingHotspot.get(0);
-            } else {
-                String coverPhoto = getFlickrPhotoUrl(hotspot.getPhotos().get(0), "b");
-                String insertHotspot = 
-                    "insert into spots (name, lat, lng, geom, photo_url, source, score, categories, description) " +
-                    "values (?, ?, ?, st_geomfromtext(?, 4326), ?, ?, ?, array[?], ?) " +
-                    "returning id";
-                
-                List<String> result = jdbcTemplate.query(insertHotspot,
-                    (rs, rowNum) -> rs.getString("id"),
-                    "Hotspot for " + landmark.getName(),
-                    hotspot.getLat(),
-                    hotspot.getLng(),
-                    String.format("POINT(%f %f)", hotspot.getLng(), hotspot.getLat()),
-                    coverPhoto,
-                    "flickr",
-                    Math.min((double) hotspot.getPhotoCount() / 10, 1.0),
-                    "hotspot",
-                    hotspot.getPhotoCount() + " photos of " + landmark.getName() + " taken from here"
-                );
-                hotspotId = result.isEmpty() ? null : result.get(0);
+        // Insert photos (with ON CONFLICT to handle duplicates)
+        return insertPhotos(spotId, photos);
+    }
+
+    /**
+     * Search Flickr for photos matching a location.
+     */
+    private List<FlickrPhoto> searchPhotos(String apiKey, TargetLocation location, String sortOrder) {
+        try {
+            StringBuilder url = new StringBuilder(FLICKR_API_BASE);
+            url.append("?method=flickr.photos.search");
+            url.append("&api_key=").append(apiKey);
+            url.append("&text=").append(URLEncoder.encode(location.getName(), StandardCharsets.UTF_8));
+            url.append("&sort=").append(sortOrder);
+            url.append("&per_page=").append(PER_PAGE);
+            url.append("&page=1");
+            url.append("&extras=").append(EXTRAS);
+            url.append("&has_geo=1");
+            url.append("&safe_search=1");
+            url.append("&content_type=1"); // Photos only (no screenshots)
+            url.append("&format=json");
+            url.append("&nojsoncallback=1");
+
+            // Add geo filter if coordinates are available
+            if (location.hasCoordinates()) {
+                url.append("&lat=").append(location.getLatitude());
+                url.append("&lon=").append(location.getLongitude());
+                url.append("&radius=").append(location.getRadiusKm());
+                url.append("&radius_units=km");
+                url.append("&accuracy=11"); // City level or better
             }
 
-            // Insert photos
-            insertPhotosForHotspot(hotspotId, hotspot.getPhotos());
+            FlickrResponse response = restTemplate.getForObject(url.toString(), FlickrResponse.class);
+            if (response == null || !"ok".equals(response.getStat())) {
+                System.err.println("         ⚠️ Flickr API error for " + location.getName());
+                return new ArrayList<>();
+            }
+            return response.getPhotos() != null ? response.getPhotos().getPhoto() : new ArrayList<>();
+        } catch (Exception e) {
+            System.err.println("         ❌ Error searching: " + e.getMessage());
+            return new ArrayList<>();
         }
     }
 
-    private void insertPhotosForHotspot(String hotspotId, List<FlickrPhoto> photos) throws Exception {
-        // Get existing keys
-        String checkSql = "select original_key from photos where spot_id = ?";
-        Set<String> existing = new HashSet<>(jdbcTemplate.query(checkSql,
-            (rs, rowNum) -> rs.getString("original_key"),
-            hotspotId));
+    /**
+     * Search within a Flickr group for photos.
+     */
+    private List<FlickrPhoto> searchGroup(String apiKey, String searchText, String groupId) {
+        try {
+            StringBuilder url = new StringBuilder(FLICKR_API_BASE);
+            url.append("?method=flickr.photos.search");
+            url.append("&api_key=").append(apiKey);
+            url.append("&group_id=").append(groupId);
+            url.append("&text=").append(URLEncoder.encode(searchText, StandardCharsets.UTF_8));
+            url.append("&sort=relevance");
+            url.append("&per_page=50"); // Smaller for group search
+            url.append("&page=1");
+            url.append("&extras=").append(EXTRAS);
+            url.append("&has_geo=1");
+            url.append("&safe_search=1");
+            url.append("&format=json");
+            url.append("&nojsoncallback=1");
 
-        // Build insert list
-        List<String> toInsert = new ArrayList<>();
-        for (FlickrPhoto photo : photos) {
-            String key = "flickr:" + photo.getId();
-            if (!existing.contains(key)) {
-                toInsert.add(key);
+            FlickrResponse response = restTemplate.getForObject(url.toString(), FlickrResponse.class);
+            if (response == null || !"ok".equals(response.getStat())) {
+                return new ArrayList<>();
             }
-        }
-
-        if (toInsert.isEmpty()) {
-            return;
-        }
-
-        // Insert new photos
-        String insertSql = 
-            "insert into photos (spot_id, original_key, variants, visibility) values (?, ?, " +
-            "jsonb_build_object('small', ?, 'medium', ?, 'large', ?, 'original', ?), ?)";
-
-        for (FlickrPhoto photo : photos) {
-            String key = "flickr:" + photo.getId();
-            if (toInsert.contains(key)) {
-                jdbcTemplate.update(insertSql,
-                    hotspotId,
-                    key,
-                    getFlickrPhotoUrl(photo, "s"),
-                    getFlickrPhotoUrl(photo, "m"),
-                    getFlickrPhotoUrl(photo, "b"),
-                    getFlickrPhotoUrl(photo, "o"),
-                    "public"
-                );
-            }
+            return response.getPhotos() != null ? response.getPhotos().getPhoto() : new ArrayList<>();
+        } catch (Exception e) {
+            System.err.println("         ❌ Error searching group: " + e.getMessage());
+            return new ArrayList<>();
         }
     }
 
-    private String getFlickrPhotoUrl(FlickrPhoto photo, String size) {
+    /**
+     * Add unique photos to the list, checking by photo ID.
+     * Returns the count of newly added photos.
+     */
+    private int addUniquePhotos(List<FlickrPhoto> newPhotos, List<FlickrPhoto> allPhotos, Set<String> seenIds) {
+        int added = 0;
+        for (FlickrPhoto photo : newPhotos) {
+            if (photo.getId() != null && !seenIds.contains(photo.getId())) {
+                seenIds.add(photo.getId());
+                allPhotos.add(photo);
+                added++;
+            }
+        }
+        return added;
+    }
+
+    /**
+     * Filter photos for quality:
+     * - Must have valid geo coordinates
+     * - Must have minimum resolution
+     * - Must have a usable URL
+     */
+    private List<FlickrPhoto> filterForQuality(List<FlickrPhoto> photos) {
+        List<FlickrPhoto> filtered = new ArrayList<>();
+        for (FlickrPhoto photo : photos) {
+            // Must have valid geo
+            if (!photo.hasValidGeo()) {
+                continue;
+            }
+            // Must have minimum resolution or usable URL
+            if (!photo.hasMinimumResolution()) {
+                continue;
+            }
+            // Must have a URL
+            String url = photo.getBestUrl();
+            if (url == null || url.isEmpty()) {
+                continue;
+            }
+            filtered.add(photo);
+        }
+        return filtered;
+    }
+
+    /**
+     * Insert photos for a spot.
+     */
+    private int insertPhotos(String spotId, List<FlickrPhoto> photos) {
+        String insertSql =
+            "INSERT INTO photos (spot_id, original_key, variants, visibility) " +
+            "VALUES (?, ?, jsonb_build_object(" +
+            "  'small', ?, " +
+            "  'medium', ?, " +
+            "  'large', ?, " +
+            "  'original', ?, " +
+            "  'latitude', ?::double precision, " +
+            "  'longitude', ?::double precision, " +
+            "  'owner_name', ?, " +
+            "  'views', ?::integer, " +
+            "  'title', ?" +
+            "), 'public') " +
+            "ON CONFLICT (original_key) DO NOTHING";
+
+        List<Object[]> batchArgs = new ArrayList<>();
+        for (FlickrPhoto photo : photos) {
+            String smallUrl = photo.getUrlZ() != null ? photo.getUrlZ() : 
+                constructUrl(photo, "s");
+            String mediumUrl = photo.getUrlC() != null ? photo.getUrlC() : 
+                constructUrl(photo, "m");
+            String largeUrl = photo.getUrlL() != null ? photo.getUrlL() : 
+                photo.getUrlB() != null ? photo.getUrlB() : constructUrl(photo, "b");
+            String originalUrl = photo.getUrlO() != null ? photo.getUrlO() : largeUrl;
+
+            batchArgs.add(new Object[]{
+                UUID.fromString(spotId),
+                "flickr:" + photo.getId(),
+                smallUrl,
+                mediumUrl,
+                largeUrl,
+                originalUrl,
+                photo.getLatitude(),
+                photo.getLongitude(),
+                photo.getOwnerName() != null ? photo.getOwnerName() : "Unknown",
+                photo.getViews(),
+                photo.getTitle() != null ? photo.getTitle() : ""
+            });
+        }
+
+        if (!batchArgs.isEmpty()) {
+            int[] results = jdbcTemplate.batchUpdate(insertSql, batchArgs);
+            int inserted = 0;
+            for (int r : results) {
+                if (r > 0) inserted++;
+            }
+            return inserted;
+        }
+        return 0;
+    }
+
+    /**
+     * Construct a Flickr static photo URL.
+     */
+    private String constructUrl(FlickrPhoto photo, String size) {
         return String.format("https://farm%d.staticflickr.com/%s/%s_%s_%s.jpg",
             photo.getFarm(), photo.getServer(), photo.getId(), photo.getSecret(), size);
     }
 
+    /**
+     * Check if location is in the Toronto area (for group search).
+     */
+    private boolean isInTorontoArea(TargetLocation location) {
+        if (!location.hasCoordinates()) {
+            // Check by name
+            String name = location.getName().toLowerCase();
+            return name.contains("toronto") || name.contains("scarborough") ||
+                   name.contains("north york") || name.contains("etobicoke") ||
+                   name.contains("mississauga") || name.contains("markham") ||
+                   name.contains("vaughan") || name.contains("brampton") ||
+                   name.contains("gta") || name.contains("ontario");
+        }
+        // Check by coordinates (rough Toronto bounding box)
+        double lat = location.getLatitude();
+        double lng = location.getLongitude();
+        return lat >= 43.5 && lat <= 44.0 && lng >= -79.8 && lng <= -79.0;
+    }
+
+    /**
+     * Delay between API requests to respect rate limits.
+     */
+    private void rateLimitDelay() {
+        try {
+            Thread.sleep(REQUEST_DELAY_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Resolve a configuration value from properties, env, or dotenv.
+     */
     private String resolveValue(String propertyValue, String key) {
         if (StringUtils.hasText(propertyValue)) {
             return propertyValue;
@@ -306,57 +437,5 @@ public class FlickrSeedService {
         }
         String dotenvValue = dotenv.get(key);
         return StringUtils.hasText(dotenvValue) ? dotenvValue : null;
-    }
-
-    private Set<String> getGenericTags() {
-        Set<String> tags = new HashSet<>();
-        // Location names
-        tags.addAll(List.of("toronto", "ontario", "canada", "scarborough", "scarboroughontario", 
-            "torontoontario", "northyork", "etobicoke", "mississauga", "markham", "vaughan", 
-            "torontocanada"));
-        // Generic photo/tech
-        tags.addAll(List.of("photo", "image", "picture", "photooftheday", "photography", 
-            "photographer", "phone", "iphone", "samsung", "mobile", "cellphone", "smartphone",
-            "camera", "canon", "nikon", "sony", "pentax", "fuji", "fujifilm", "olympus",
-            "lens", "dslr", "mirrorless", "pro", "promax"));
-        // Years & dates
-        tags.addAll(List.of("2024", "2023", "2022", "2021", "2025", "2020", "2019", "2018", 
-            "2017", "2016", "january", "february", "march", "april", "may", "june", "july",
-            "august", "september", "october", "november", "december"));
-        // Generic descriptors
-        tags.addAll(List.of("the", "a", "an", "and", "or", "in", "at", "on", "of", "for", "with"));
-        // Urban/location
-        tags.addAll(List.of("streetphotography", "street", "urban", "city", "downtown", "uptown",
-            "midtown", "outdoor", "outdoors", "indoor", "indoors", "outside", "inside",
-            "building", "buildings", "architecture", "construction", "torontoconstruction",
-            "skyscraper", "highrise", "tower", "towers", "supertall", "supertallskyscraper",
-            "supertallbuilding", "skygrid", "condo", "condos", "apartment", "apartments"));
-        // Activities/objects
-        tags.addAll(List.of("food", "drink", "coffee", "restaurant", "cafe", "dining",
-            "shopping", "shop", "store", "shops", "stores", "retail",
-            "window", "windowdisplay", "display", "sign", "signage",
-            "art", "mural", "graffiti", "sculpture", "statue",
-            "people", "person", "crowd", "crowds", "man", "woman", "child"));
-        // Events/times
-        tags.addAll(List.of("fair", "festival", "event", "concert", "show", "exhibition",
-            "protest", "rally", "demonstration", "march", "parade",
-            "night", "day", "morning", "afternoon", "evening", "sunset", "sunrise",
-            "summer", "winter", "spring", "fall", "autumn"));
-        // Transit
-        tags.addAll(List.of("transit", "ttc", "subway", "bus", "streetcar", "train", "tram",
-            "torontotransit", "metrolinx", "gotransit", "line1", "line2",
-            "flexity", "bombardier", "ttcflexity", "lrv", "fleet"));
-        // Street names
-        tags.addAll(List.of("bloor", "yonge", "queen", "king", "dundas", "college", "wellesley",
-            "bay", "university", "spadina", "bathurst"));
-        // Companies
-        tags.addAll(List.of("tridel", "mizrahi", "mizrahidevelopments", "cadillacfairview"));
-        // Colors
-        tags.addAll(List.of("red", "blue", "green", "yellow", "black", "white", "grey", "gray",
-            "new", "old", "modern", "historic", "contemporary", "vintage"));
-        // Photo subjects
-        tags.addAll(List.of("selfportrait", "selfie", "portrait", "pattern", "light", "shadow",
-            "reflection", "abstract", "detail", "texture", "perspective"));
-        return tags;
     }
 }

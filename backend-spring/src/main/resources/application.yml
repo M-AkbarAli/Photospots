@@ -7,7 +7,7 @@ spring:
     password: photospots
   jpa:
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: validate
     properties:
       hibernate:
         format_sql: true

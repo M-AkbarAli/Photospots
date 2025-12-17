@@ -1,21 +1,22 @@
 package com.photospots.model;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.ElementCollection;
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
 import org.hibernate.type.SqlTypes;
 import org.locationtech.jts.geom.Point;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
 
 @Entity
 @Table(name = "spots")
@@ -30,7 +31,8 @@ public class Spot {
     @Column(length = 1024)
     private String description;
 
-    @ElementCollection
+    @JdbcTypeCode(SqlTypes.ARRAY)
+    @Column(columnDefinition = "text[]")
     private List<String> categories = new ArrayList<>();
 
     private Double lat;
@@ -38,10 +40,15 @@ public class Spot {
     private Double lng;
 
     @JdbcTypeCode(SqlTypes.GEOMETRY)
-    @Column(columnDefinition = "geometry(Point, 4326)")
+    @Column(name = "geom", columnDefinition = "geometry(Point, 4326)")
     private Point location;
 
     private Double score;
+
+    @Column(name = "photo_url")
+    private String photoUrl;
+
+    private String source;
 
     @CreationTimestamp
     private Instant createdAt;
@@ -111,6 +118,22 @@ public class Spot {
 
     public void setScore(Double score) {
         this.score = score;
+    }
+
+    public String getPhotoUrl() {
+        return photoUrl;
+    }
+
+    public void setPhotoUrl(String photoUrl) {
+        this.photoUrl = photoUrl;
+    }
+
+    public String getSource() {
+        return source;
+    }
+
+    public void setSource(String source) {
+        this.source = source;
     }
 
     public Instant getCreatedAt() {
