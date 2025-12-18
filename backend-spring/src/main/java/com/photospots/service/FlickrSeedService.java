@@ -95,6 +95,21 @@ public class FlickrSeedService {
         }
     }
 
+    private static class FetchCounters {
+        int fetched = 0;
+        int missingGeo = 0;
+        int outsideGta = 0;
+        int outsideRadius = 0;
+        int kept = 0;
+
+        void reset() {
+            fetched = 0;
+            missingGeo = 0;
+            outsideGta = 0;
+            outsideRadius = 0;
+            kept = 0;
+        }
+    }
     private static final String FLICKR_API_BASE = "https://api.flickr.com/services/rest/";
     private static final String EXTRAS = "url_l,url_o,url_z,url_c,url_b,geo,owner_name,views,tags";
     private static final int PER_PAGE = 100;
@@ -102,9 +117,21 @@ public class FlickrSeedService {
     private static final int MIN_PHOTOS_PER_HOTSPOT = 3;
     private static final int MAX_HOTSPOTS_PER_LANDMARK = 20;
     private static final long REQUEST_DELAY_MS = 500;
-    private static final String TORONTO_GROUP_ID = "36521959@N00";
 
+    private static final String TORONTO_GROUP_ID = "36521959@N00";
+    // GTA hard boundaries (defense in depth)
+    private static final double GTA_MIN_LAT = 43.10;
+    private static final double GTA_MAX_LAT = 44.35;
+    private static final double GTA_MIN_LNG = -80.30;
+
+    private static final double GTA_MAX_LNG = -78.40;
+    private static final double DEFAULT_RADIUS_METERS = 1500.0;
+
+    private static final double RADIUS_MARGIN = 1.15; // 15% safety margin
+
+    private static final int PHOTO_BATCH_SIZE = 500;
     private final RestTemplate restTemplate;
+
     private final JdbcTemplate jdbcTemplate;
 
     @Value("${flickr.api-key:}")
@@ -132,39 +159,50 @@ public class FlickrSeedService {
         List<FlickrPhoto> allPhotos = new ArrayList<>();
         int duplicateCount = 0;
 
+        FetchCounters counters = new FetchCounters();
+
         System.out.println("      🔍 Searching by relevance...");
-        List<FlickrPhoto> relevancePhotos = searchPhotos(apiKey, location, "relevance");
+        List<FlickrPhoto> relevancePhotos = clampToGtaAndRadius(location, searchPhotos(apiKey, location, "relevance"), counters);
         int relevanceCount = addUniquePhotos(relevancePhotos, allPhotos, seenPhotoIds);
-        duplicateCount += (relevancePhotos.size() - relevanceCount);
-        System.out.println("         Found " + relevancePhotos.size() + " photos, " + relevanceCount + " unique");
+        int relevanceDupes = relevancePhotos.size() - relevanceCount;
+        duplicateCount += Math.max(0, relevanceDupes);
+        logStrategy("relevance", counters, relevancePhotos.size(), relevanceCount, relevanceDupes);
         rateLimitDelay();
 
         System.out.println("      ⭐ Searching by interestingness...");
-        List<FlickrPhoto> interestingPhotos = searchPhotos(apiKey, location, "interestingness-desc");
+        List<FlickrPhoto> interestingPhotos = clampToGtaAndRadius(location, searchPhotos(apiKey, location, "interestingness-desc"), counters);
         int interestingCount = addUniquePhotos(interestingPhotos, allPhotos, seenPhotoIds);
-        duplicateCount += (interestingPhotos.size() - interestingCount);
-        System.out.println("         Found " + interestingPhotos.size() + " photos, " + interestingCount + " unique");
+        int interestingDupes = interestingPhotos.size() - interestingCount;
+        duplicateCount += Math.max(0, interestingDupes);
+        logStrategy("interestingness", counters, interestingPhotos.size(), interestingCount, interestingDupes);
         rateLimitDelay();
 
         if (location.getAlternateNames() != null && location.getAlternateNames().length > 0) {
+            int altUsed = 0;
             for (String altName : location.getAlternateNames()) {
+                if (altUsed >= 2) {
+                    break; // cap alt-name searches
+                }
                 System.out.println("      🔄 Searching alternate name: " + altName);
                 TargetLocation altLocation = new TargetLocation(altName,
                         location.getLatitude(), location.getLongitude(), location.getRadiusKm());
-                List<FlickrPhoto> altPhotos = searchPhotos(apiKey, altLocation, "relevance");
+                List<FlickrPhoto> altPhotos = clampToGtaAndRadius(location, searchPhotos(apiKey, altLocation, "relevance"), counters);
                 int altCount = addUniquePhotos(altPhotos, allPhotos, seenPhotoIds);
-                duplicateCount += (altPhotos.size() - altCount);
-                System.out.println("         Found " + altPhotos.size() + " photos, " + altCount + " unique");
+                int altDupes = altPhotos.size() - altCount;
+                duplicateCount += Math.max(0, altDupes);
+                logStrategy("alt-name", counters, altPhotos.size(), altCount, altDupes);
                 rateLimitDelay();
+                altUsed++;
             }
         }
 
         if (isInTorontoArea(location)) {
             System.out.println("      🏙️ Searching Toronto Flickr group...");
-            List<FlickrPhoto> groupPhotos = searchGroup(apiKey, location.getName(), TORONTO_GROUP_ID);
+            List<FlickrPhoto> groupPhotos = clampToGtaAndRadius(location, searchGroup(apiKey, location.getName(), TORONTO_GROUP_ID), counters);
             int groupCount = addUniquePhotos(groupPhotos, allPhotos, seenPhotoIds);
-            duplicateCount += (groupPhotos.size() - groupCount);
-            System.out.println("         Found " + groupPhotos.size() + " photos, " + groupCount + " unique");
+            int groupDupes = groupPhotos.size() - groupCount;
+            duplicateCount += Math.max(0, groupDupes);
+            logStrategy("group", counters, groupPhotos.size(), groupCount, groupDupes);
             rateLimitDelay();
         }
 
@@ -213,6 +251,7 @@ public class FlickrSeedService {
             url.append("&content_type=1");
             url.append("&format=json");
             url.append("&nojsoncallback=1");
+            url.append("&bbox=").append(GTA_MIN_LNG).append(",").append(GTA_MIN_LAT).append(",").append(GTA_MAX_LNG).append(",").append(GTA_MAX_LAT);
 
             if (location.hasCoordinates()) {
                 url.append("&lat=").append(location.getLatitude());
@@ -249,6 +288,7 @@ public class FlickrSeedService {
             url.append("&safe_search=1");
             url.append("&format=json");
             url.append("&nojsoncallback=1");
+            url.append("&bbox=").append(GTA_MIN_LNG).append(",").append(GTA_MIN_LAT).append(",").append(GTA_MAX_LNG).append(",").append(GTA_MAX_LAT);
 
             FlickrResponse response = restTemplate.getForObject(url.toString(), FlickrResponse.class);
             if (response == null || !"ok".equals(response.getStat())) {
@@ -381,19 +421,19 @@ public class FlickrSeedService {
 
     private int insertPhotosForHotspots(Map<String, UUID> hotspotIds, Map<String, List<FlickrPhoto>> clusters) {
         String sql = "INSERT INTO photos (spot_id, original_key, variants, visibility, lat, lng, geom) " +
-                "VALUES (?, ?, jsonb_build_object(" +
-                "  'small', ?, " +
-                "  'medium', ?, " +
-                "  'large', ?, " +
-                "  'original', ?, " +
-                "  'latitude', ?::double precision, " +
-                "  'longitude', ?::double precision, " +
-                "  'owner_name', ?, " +
-                "  'views', ?::integer, " +
-                "  'title', ?" +
-                "), 'public', ?, ?, ST_SetSRID(ST_MakePoint(?, ?), 4326)) " +
-                "ON CONFLICT (original_key) DO UPDATE SET " +
-                "spot_id = EXCLUDED.spot_id, variants = EXCLUDED.variants, lat = EXCLUDED.lat, lng = EXCLUDED.lng, geom = EXCLUDED.geom, visibility = EXCLUDED.visibility";
+            "VALUES (?, ?, jsonb_build_object(" +
+            "  'small', ?, " +
+            "  'medium', ?, " +
+            "  'large', ?, " +
+            "  'original', ?, " +
+            "  'latitude', ?::double precision, " +
+            "  'longitude', ?::double precision, " +
+            "  'owner_name', ?, " +
+            "  'views', ?::integer, " +
+            "  'title', ?" +
+            "), 'public', ?, ?, ST_SetSRID(ST_MakePoint(?, ?), 4326)) " +
+            "ON CONFLICT (original_key) DO UPDATE SET " +
+            "variants = EXCLUDED.variants, visibility = EXCLUDED.visibility, lat = EXCLUDED.lat, lng = EXCLUDED.lng, geom = EXCLUDED.geom";
 
         List<Object[]> batchArgs = new ArrayList<>();
         for (Map.Entry<String, List<FlickrPhoto>> entry : clusters.entrySet()) {
@@ -435,11 +475,14 @@ public class FlickrSeedService {
             return 0;
         }
 
-        int[] results = jdbcTemplate.batchUpdate(sql, batchArgs);
         int inserted = 0;
-        for (int r : results) {
-            if (r > 0) {
-                inserted += r;
+        for (int start = 0; start < batchArgs.size(); start += PHOTO_BATCH_SIZE) {
+            int end = Math.min(start + PHOTO_BATCH_SIZE, batchArgs.size());
+            int[] results = jdbcTemplate.batchUpdate(sql, batchArgs.subList(start, end));
+            for (int r : results) {
+                if (r > 0) {
+                    inserted += r;
+                }
             }
         }
         return inserted;
@@ -545,5 +588,65 @@ public class FlickrSeedService {
         BigDecimal bd = BigDecimal.valueOf(value);
         bd = bd.setScale(precision, java.math.RoundingMode.HALF_UP);
         return bd.doubleValue();
+    }
+
+    private boolean isWithinGta(double lat, double lng) {
+        return lat >= GTA_MIN_LAT && lat <= GTA_MAX_LAT && lng >= GTA_MIN_LNG && lng <= GTA_MAX_LNG;
+    }
+
+    private double haversineMeters(double lat1, double lng1, double lat2, double lng2) {
+        double R = 6371000.0; // meters
+        double dLat = Math.toRadians(lat2 - lat1);
+        double dLng = Math.toRadians(lng2 - lng1);
+        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+                        Math.sin(dLng / 2) * Math.sin(dLng / 2);
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
+    private boolean isWithinTargetRadius(TargetLocation location, FlickrPhoto photo) {
+        if (!location.hasCoordinates()) {
+            return false;
+        }
+        double radiusKm = Math.max(location.getRadiusKm(), DEFAULT_RADIUS_METERS / 1000.0);
+        double radiusMeters = radiusKm * 1000.0 * RADIUS_MARGIN;
+        double distance = haversineMeters(location.getLatitude(), location.getLongitude(), photo.getLatitude(), photo.getLongitude());
+        return distance <= radiusMeters;
+    }
+
+    private List<FlickrPhoto> clampToGtaAndRadius(TargetLocation location, List<FlickrPhoto> photos, FetchCounters counters) {
+        counters.fetched += photos.size();
+        List<FlickrPhoto> kept = new ArrayList<>();
+        for (FlickrPhoto p : photos) {
+            if (!p.hasValidGeo()) {
+                counters.missingGeo++;
+                continue;
+            }
+            if (!isWithinGta(p.getLatitude(), p.getLongitude())) {
+                counters.outsideGta++;
+                continue;
+            }
+            if (!isWithinTargetRadius(location, p)) {
+                counters.outsideRadius++;
+                continue;
+            }
+            kept.add(p);
+        }
+        counters.kept += kept.size();
+        return kept;
+    }
+
+    private void logStrategy(String label, FetchCounters counters, int keptAfterClamp, int uniqueAdded, int dupes) {
+        System.out.println(String.format("         [%s] fetched:%d geo-kept:%d gta-kept:%d radius-kept:%d kept:%d unique-added:%d dupes:%d",
+                label,
+                counters.fetched,
+                counters.fetched - counters.missingGeo,
+                counters.fetched - counters.missingGeo - counters.outsideGta,
+                counters.fetched - counters.missingGeo - counters.outsideGta - counters.outsideRadius,
+                keptAfterClamp,
+                uniqueAdded,
+                Math.max(0, dupes)));
+        counters.reset();
     }
 }
