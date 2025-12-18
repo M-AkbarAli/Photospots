@@ -22,6 +22,12 @@ public class FlickrPhoto {
     
     @JsonProperty("url_o")
     private String urlO;
+
+    @JsonProperty("url_m")
+    private String urlM;
+
+    @JsonProperty("url_s")
+    private String urlS;
     
     @JsonProperty("url_z")
     private String urlZ;
@@ -145,6 +151,22 @@ public class FlickrPhoto {
         this.urlO = urlO;
     }
 
+    public String getUrlM() {
+        return urlM;
+    }
+
+    public void setUrlM(String urlM) {
+        this.urlM = urlM;
+    }
+
+    public String getUrlS() {
+        return urlS;
+    }
+
+    public void setUrlS(String urlS) {
+        this.urlS = urlS;
+    }
+
     public String getUrlZ() {
         return urlZ;
     }
@@ -221,13 +243,14 @@ public class FlickrPhoto {
      * Get the best available photo URL (prefer larger sizes)
      */
     public String getBestUrl() {
-        if (urlO != null && !urlO.isEmpty()) return urlO;
         if (urlL != null && !urlL.isEmpty()) return urlL;
+        if (urlM != null && !urlM.isEmpty()) return urlM;
+        if (urlS != null && !urlS.isEmpty()) return urlS;
+        if (urlO != null && !urlO.isEmpty()) return urlO;
         if (urlB != null && !urlB.isEmpty()) return urlB;
         if (urlC != null && !urlC.isEmpty()) return urlC;
         if (urlZ != null && !urlZ.isEmpty()) return urlZ;
-        // Fallback to constructed URL
-        return String.format("https://farm%d.staticflickr.com/%s/%s_%s_b.jpg",
+        return String.format("https://farm%d.staticflickr.com/%s/%s_%s_m.jpg",
             farm, server, id, secret);
     }
     
@@ -235,27 +258,20 @@ public class FlickrPhoto {
      * Check if this photo has sufficient resolution (at least 800px on one side)
      */
     public boolean hasMinimumResolution() {
-        // If we have dimension info, check it
-        if (widthL > 0 || heightL > 0) {
-            return widthL >= 800 || heightL >= 800;
+        if (widthO > 0 && heightO > 0) {
+            long pixels = (long) widthO * (long) heightO;
+            return pixels >= 250_000;
         }
-        if (widthO > 0 || heightO > 0) {
-            return widthO >= 800 || heightO >= 800;
+        if (widthL > 0 && heightL > 0) {
+            long pixels = (long) widthL * (long) heightL;
+            return pixels >= 250_000;
         }
-        // If we have url_l or url_o, assume it meets minimum
-        if ((urlL != null && !urlL.isEmpty()) || (urlO != null && !urlO.isEmpty())) {
+        if ((urlL != null && !urlL.isEmpty()) || (urlB != null && !urlB.isEmpty()) ||
+            (urlC != null && !urlC.isEmpty()) || (urlM != null && !urlM.isEmpty()) ||
+            (urlO != null && !urlO.isEmpty())) {
             return true;
         }
-        // url_b (1024px) should be sufficient
-        if (urlB != null && !urlB.isEmpty()) {
-            return true;
-        }
-        // url_c (800px) meets minimum
-        if (urlC != null && !urlC.isEmpty()) {
-            return true;
-        }
-        // url_z (640px) is below threshold but still usable
-        return urlZ != null && !urlZ.isEmpty();
+        return urlS != null && !urlS.isEmpty();
     }
     
     /**

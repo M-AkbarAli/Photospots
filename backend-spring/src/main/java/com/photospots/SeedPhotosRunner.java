@@ -51,11 +51,21 @@ public class SeedPhotosRunner implements ApplicationRunner {
             resetSeedData();
         }
 
+        boolean visionEnabled = true;
+        if (args.containsOption("vision-filter")) {
+            List<String> values = args.getOptionValues("vision-filter");
+            if (values != null && !values.isEmpty()) {
+                visionEnabled = Boolean.parseBoolean(values.get(0));
+            }
+        }
+
         System.out.println("\n");
         System.out.println("╔══════════════════════════════════════════════════════════════════╗");
         System.out.println("║           🌍 FLICKR PHOTO SPOT SEED SCRIPT                       ║");
         System.out.println("║   Following seedscript.md strategy for photo spot population     ║");
         System.out.println("╚══════════════════════════════════════════════════════════════════╝");
+        System.out.println();
+        System.out.println("   • Vision filter: " + (visionEnabled ? "enabled" : "disabled"));
         System.out.println();
 
         // Load target locations from JSON (configurable)
@@ -72,12 +82,14 @@ public class SeedPhotosRunner implements ApplicationRunner {
         int successCount = 0;
         int failCount = 0;
         int totalPhotosInserted = 0;
+        int totalPhotosAttempted = 0;
         int totalLandmarks = 0;
         int totalHotspots = 0;
         int totalMissingGeo = 0;
         int totalMissingUrl = 0;
         int totalDuplicates = 0;
         int totalFailedInsert = 0;
+        int totalConflictSkipped = 0;
         List<SeedResult> results = new ArrayList<>();
 
         for (int i = 0; i < targetLocations.size(); i++) {
@@ -88,14 +100,16 @@ public class SeedPhotosRunner implements ApplicationRunner {
             System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
             try {
-                SeedResult result = flickrSeedService.seedLocation(location);
+                SeedResult result = flickrSeedService.seedLocation(location, visionEnabled);
                 results.add(result);
                 totalLandmarks += result.getLandmarkUpserts();
                 totalHotspots += result.getHotspotUpserts();
                 totalMissingGeo += result.getMissingGeo();
                 totalMissingUrl += result.getMissingUrl();
                 totalDuplicates += result.getDuplicateCount();
+                totalConflictSkipped += result.getConflictSkipped();
                 totalFailedInsert += result.getFailedInsert();
+                totalPhotosAttempted += result.getPhotosAttempted();
                 
                 if (result.getInsertedPhotos() > 0) {
                     successCount++;
@@ -122,19 +136,21 @@ public class SeedPhotosRunner implements ApplicationRunner {
         System.out.println("   • Locations processed: " + targetLocations.size());
         System.out.println("   • Successful: " + successCount);
         System.out.println("   • Failed/Empty: " + failCount);
+        System.out.println("   • Total photos attempted: " + totalPhotosAttempted);
         System.out.println("   • Total photos inserted: " + totalPhotosInserted);
+        System.out.println("   • Conflict-skipped (existing): " + totalConflictSkipped);
+        System.out.println("   • Failed inserts (exceptions): " + totalFailedInsert);
         System.out.println("   • Landmark spots upserted: " + totalLandmarks);
         System.out.println("   • Hotspot spots upserted: " + totalHotspots);
         System.out.println("   • Skipped (missing geo): " + totalMissingGeo);
         System.out.println("   • Skipped (missing url/quality): " + totalMissingUrl);
         System.out.println("   • Skipped (duplicates): " + totalDuplicates);
-        System.out.println("   • Failed inserts: " + totalFailedInsert);
         System.out.println();
         System.out.println("📍 Results by location:");
         for (SeedResult result : results) {
             String status = result.getInsertedPhotos() > 0 ? "✅" : "⚠️";
             System.out.println("   " + status + " " + result.getLocationName() + 
-                ": " + result.getFilteredPhotos() + " filtered, " + result.getInsertedPhotos() + " inserted (landmarks: " +
+                ": " + result.getFilteredPhotos() + " filtered, " + result.getPhotosAttempted() + " attempted, " + result.getInsertedPhotos() + " inserted, " + result.getConflictSkipped() + " conflict-skipped, " + result.getFailedInsert() + " failed (landmarks: " +
                 result.getLandmarkUpserts() + ", hotspots: " + result.getHotspotUpserts() + ")");
         }
         System.out.println();
