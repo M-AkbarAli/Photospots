@@ -193,6 +193,19 @@ public class FlickrSeedService {
             kept = 0;
         }
     }
+    private static class ClusterCandidate {
+        private final String key;
+        private final List<FlickrPhoto> photos;
+        private final double[] center;
+        private final double score;
+
+        private ClusterCandidate(String key, List<FlickrPhoto> photos, double[] center, double score) {
+            this.key = key;
+            this.photos = photos;
+            this.center = center;
+            this.score = score;
+        }
+    }
     private static final String FLICKR_API_BASE = "https://api.flickr.com/services/rest/";
     private static final String EXTRAS = "url_s,url_m,url_l,url_o,geo,owner_name,views,tags,o_dims";
     private static final int PER_PAGE = 100;
@@ -201,39 +214,43 @@ public class FlickrSeedService {
     private static final int MAX_HOTSPOTS_PER_LANDMARK = 20;
     private static final int MAX_PHOTOS_PER_HOTSPOT = 30;
     private static final int MIN_LANDMARK_PHOTOS_FOR_FALLBACK = 8;
-    private static final long REQUEST_DELAY_MS = 500;
+    private static final int MAX_HOTSPOTS_PER_AREA = 60;
+    private static final double MIN_HOTSPOT_SEPARATION_METERS = 80.0;
 
+    private static final long REQUEST_DELAY_MS = 500;
     private static final String TORONTO_GROUP_ID = "36521959@N00";
     // GTA hard boundaries (defense in depth)
     private static final double GTA_MIN_LAT = 43.10;
     private static final double GTA_MAX_LAT = 44.35;
+
     private static final double GTA_MIN_LNG = -80.30;
-
     private static final double GTA_MAX_LNG = -78.40;
-    private static final double DEFAULT_RADIUS_METERS = 1500.0;
 
+    private static final double DEFAULT_RADIUS_METERS = 1500.0;
     private static final double RADIUS_MARGIN = 1.15; // 15% safety margin
 
+        private static final String TILE_TAGS = "streetart,graffiti,mural,architecture,cityscape,skyline,bridge,waterfront,park,trail,lookout";
         private static final int PHOTO_BATCH_SIZE = 500;
-        private static final String[] EXCLUDE_TOKENS = new String[]{
-            "selfie", "portrait", "headshot", "model", "fashion", "wedding", "engagement",
-            "bird", "birds", "wildlife", "owl", "hawk", "eagle", "duck", "goose", "dog", "puppy", "cat", "kitten",
-            "food", "meal", "dinner", "lunch", "coffee"
-        };
 
-            private static final Set<String> SUSPECT_TOKENS = Set.of(EXCLUDE_TOKENS);
+            private static final String[] EXCLUDE_TOKENS = new String[]{
+                "selfie", "portrait", "headshot", "model", "fashion", "wedding", "engagement",
+                "bird", "birds", "wildlife", "owl", "hawk", "eagle", "duck", "goose", "dog", "puppy", "cat", "kitten",
+                "food", "meal", "dinner", "lunch", "coffee"
+            };
+        private static final Set<String> SUSPECT_TOKENS = Set.of(EXCLUDE_TOKENS);
         private static final Set<String> BASE_LOCATION_TOKENS = Set.of("toronto", "ontario", "canada");
         private static final int CANDIDATES_PER_HOTSPOT = 120;
         private static final int BLUR_THRESHOLD = 60;
+
         private static final int PYTHON_TIMEOUT_SECONDS = 45;
 
         private static final String VISION_SCRIPT = Paths.get("tools", "photo_filter", "filter_photos.py").toString();
 
         private final RestTemplate restTemplate;
-
         private final JdbcTemplate jdbcTemplate;
         private final ObjectMapper objectMapper = new ObjectMapper();
-        private final Map<String, VisionResult> visionCache = new HashMap<>();
+
+    private final Map<String, VisionResult> visionCache = new HashMap<>();
 
     @Value("${flickr.api-key:}")
     private String flickrApiKey;
@@ -398,6 +415,214 @@ public class FlickrSeedService {
             0);
     }
 
+    public SeedResult seedArea(AreaConfig area, boolean visionEnabled) throws Exception {
+        String apiKey = resolveValue(flickrApiKey, "FLICKR_API_KEY");
+        if (!StringUtils.hasText(apiKey)) {
+            throw new Exception("FLICKR_API_KEY is not set in environment");
+        }
+
+        System.out.println("   🗺️  Area mode: " + area.getName() + " (key=" + area.getKey() + ")");
+
+        List<TargetLocation> tiles = buildTiles(area);
+        System.out.println("   🔲 Tiles generated: " + tiles.size());
+
+        Set<String> seenPhotoIds = new HashSet<>();
+        List<FlickrPhoto> allFiltered = new ArrayList<>();
+        int duplicateCount = 0;
+        int totalFetched = 0;
+        int totalMissingGeo = 0;
+        int totalMissingUrl = 0;
+
+        int tileIdx = 0;
+        for (TargetLocation tile : tiles) {
+            tileIdx++;
+            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            System.out.println("   🧭 Tile " + tileIdx + "/" + tiles.size() + " — " + tile.getName());
+
+            FetchCounters counters = new FetchCounters();
+            List<FlickrPhoto> tilePhotos = new ArrayList<>();
+
+            int tileFetchedTotal = 0;
+            int tileRadiusKeptTotal = 0;
+            int tileUniqueAdded = 0;
+
+            // Query A: geo-only discovery, sorted by interestingness
+            List<FlickrPhoto> interesting = clampToGtaAndRadius(tile, searchPhotosGeo(apiKey, tile, "interestingness-desc"), counters);
+            tileFetchedTotal += counters.fetched;
+            tileRadiusKeptTotal += interesting.size();
+            int interestingAdded = addUniquePhotos(interesting, tilePhotos, seenPhotoIds);
+            tileUniqueAdded += interestingAdded;
+            duplicateCount += Math.max(0, interesting.size() - interestingAdded);
+            logStrategy("tile-interesting", counters, interesting.size(), interestingAdded, interesting.size() - interestingAdded);
+            rateLimitDelay();
+
+            // Query B: geo + street/urban tags, sorted by relevance
+            List<FlickrPhoto> tagged = clampToGtaAndRadius(tile, searchPhotosGeoWithTags(apiKey, tile, "relevance", TILE_TAGS), counters);
+            tileFetchedTotal += counters.fetched;
+            tileRadiusKeptTotal += tagged.size();
+            int taggedAdded = addUniquePhotos(tagged, tilePhotos, seenPhotoIds);
+            tileUniqueAdded += taggedAdded;
+            duplicateCount += Math.max(0, tagged.size() - taggedAdded);
+            logStrategy("tile-tags", counters, tagged.size(), taggedAdded, tagged.size() - taggedAdded);
+            rateLimitDelay();
+
+            totalFetched += tileFetchedTotal;
+
+            FilterOutcome tileFiltered = filterForQuality(tile, tilePhotos);
+            totalMissingGeo += tileFiltered.missingGeo;
+            totalMissingUrl += tileFiltered.missingUrl;
+            allFiltered.addAll(tileFiltered.qualityPhotos);
+
+            System.out.println("   📊 Tile summary — fetched:" + tileFetchedTotal +
+                    " radius-kept:" + tileRadiusKeptTotal +
+                    " unique-added:" + tileUniqueAdded +
+                    " filtered:" + tileFiltered.qualityPhotos.size());
+        }
+
+        if (allFiltered.isEmpty()) {
+            System.out.println("   ⚠️ Area yielded 0 filtered photos");
+            return new SeedResult(area.getName(), totalFetched, 0, 0, 0, 0, totalMissingGeo, totalMissingUrl, duplicateCount, 0, 0, 0);
+        }
+
+        Map<String, List<FlickrPhoto>> clusters = clusterAreaPhotos(allFiltered);
+        boolean fallbackUsed = false;
+        if (clusters.isEmpty()) {
+            fallbackUsed = true;
+            System.out.println("   🛟 Area fallback hotspot used (reason: no clusters)");
+            Map<String, List<FlickrPhoto>> fallback = new LinkedHashMap<>();
+            fallback.put("fallback", selectTopPhotosForHotspot(allFiltered));
+            clusters = fallback;
+        }
+
+        String coverUrl = chooseDisplayUrl(allFiltered.get(0));
+        UUID areaLandmarkId = upsertAreaLandmark(area, coverUrl, allFiltered.size());
+        int landmarkUpserts = areaLandmarkId != null ? 1 : 0;
+
+        VisionOutcome visionOutcome = applyVisionFiltering(clusters, visionEnabled);
+        Map<String, List<FlickrPhoto>> postVisionClusters = trimClusters(visionOutcome.filteredClusters);
+
+        Map<String, UUID> hotspotIds = upsertAreaHotspots(area, areaLandmarkId, postVisionClusters);
+        int hotspotUpserts = hotspotIds.size();
+
+        InsertStats insertStats = insertPhotosForHotspots(hotspotIds, postVisionClusters, visionOutcome.qaByPhotoKey);
+
+        int uniqueCandidates = allFiltered.size();
+        int newCandidates = insertStats.inserted;
+
+        System.out.println("   📈 Area candidates — unique collected:" + uniqueCandidates +
+            " new (not-in-DB):" + newCandidates);
+        if (newCandidates == 0) {
+            System.out.println("   ℹ️  Area already populated; no new photos available under current search settings.");
+        }
+
+        System.out.println("   ✅ Area upsert complete — hotspots:" + hotspotUpserts +
+                " attempted:" + insertStats.attempted +
+                " inserted:" + insertStats.inserted +
+                " conflict-skipped:" + insertStats.conflicts +
+                " failed:" + insertStats.failed +
+                (fallbackUsed ? " [fallback hotspot used]" : ""));
+
+        return new SeedResult(area.getName(), totalFetched, allFiltered.size(), insertStats.inserted, landmarkUpserts,
+                hotspotUpserts, totalMissingGeo, totalMissingUrl, duplicateCount, insertStats.conflicts, insertStats.failed, insertStats.attempted);
+    }
+
+    private List<FlickrPhoto> searchPhotosGeo(String apiKey, TargetLocation location, String sortOrder) {
+        try {
+            StringBuilder url = new StringBuilder(FLICKR_API_BASE);
+            url.append("?method=flickr.photos.search");
+            url.append("&api_key=").append(apiKey);
+            url.append("&sort=").append(sortOrder);
+            url.append("&per_page=").append(PER_PAGE);
+            url.append("&page=1");
+            url.append("&extras=").append(EXTRAS);
+            url.append("&has_geo=1");
+            url.append("&safe_search=1");
+            url.append("&content_type=1");
+            url.append("&format=json");
+            url.append("&nojsoncallback=1");
+
+            if (location.hasCoordinates()) {
+                url.append("&lat=").append(location.getLatitude());
+                url.append("&lon=").append(location.getLongitude());
+                url.append("&radius=").append(location.getRadiusKm());
+                url.append("&radius_units=km");
+                url.append("&accuracy=11");
+            } else {
+                url.append("&bbox=").append(GTA_MIN_LNG).append(",").append(GTA_MIN_LAT).append(",").append(GTA_MAX_LNG).append(",").append(GTA_MAX_LAT);
+            }
+
+            FlickrResponse response = restTemplate.getForObject(url.toString(), FlickrResponse.class);
+            if (response == null || !"ok".equals(response.getStat())) {
+                System.err.println("         ⚠️ Flickr API error for geo search sort=" + sortOrder);
+                return new ArrayList<>();
+            }
+            if (response.getPhotos() == null || response.getPhotos().getPhoto() == null || response.getPhotos().getPhoto().isEmpty()) {
+                if (location.hasCoordinates()) {
+                    System.out.println("         ⚠️ Flickr returned 0 photos for geo query sort=" + sortOrder +
+                            " lat=" + location.getLatitude() + " lon=" + location.getLongitude() + " radius=" + location.getRadiusKm());
+                } else {
+                    System.out.println("         ⚠️ Flickr returned 0 photos for geo query sort=" + sortOrder +
+                            " bbox=" + GTA_MIN_LNG + "," + GTA_MIN_LAT + "," + GTA_MAX_LNG + "," + GTA_MAX_LAT);
+                }
+            }
+            return response.getPhotos() != null ? response.getPhotos().getPhoto() : new ArrayList<>();
+        } catch (Exception e) {
+            System.err.println("         ❌ Error searching geo: " + e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    private List<FlickrPhoto> searchPhotosGeoWithTags(String apiKey, TargetLocation location, String sortOrder, String tags) {
+        try {
+            StringBuilder url = new StringBuilder(FLICKR_API_BASE);
+            url.append("?method=flickr.photos.search");
+            url.append("&api_key=").append(apiKey);
+            url.append("&sort=").append(sortOrder);
+            url.append("&per_page=").append(PER_PAGE);
+            url.append("&page=1");
+            url.append("&extras=").append(EXTRAS);
+            url.append("&has_geo=1");
+            url.append("&safe_search=1");
+            url.append("&content_type=1");
+            url.append("&format=json");
+            url.append("&nojsoncallback=1");
+
+            if (StringUtils.hasText(tags)) {
+                url.append("&tags=").append(URLEncoder.encode(tags, StandardCharsets.UTF_8));
+                url.append("&tag_mode=any");
+            }
+
+            if (location.hasCoordinates()) {
+                url.append("&lat=").append(location.getLatitude());
+                url.append("&lon=").append(location.getLongitude());
+                url.append("&radius=").append(location.getRadiusKm());
+                url.append("&radius_units=km");
+                url.append("&accuracy=11");
+            } else {
+                url.append("&bbox=").append(GTA_MIN_LNG).append(",").append(GTA_MIN_LAT).append(",").append(GTA_MAX_LNG).append(",").append(GTA_MAX_LAT);
+            }
+
+            FlickrResponse response = restTemplate.getForObject(url.toString(), FlickrResponse.class);
+            if (response == null || !"ok".equals(response.getStat())) {
+                System.err.println("         ⚠️ Flickr API error for tagged geo search sort=" + sortOrder);
+                return new ArrayList<>();
+            }
+            if (response.getPhotos() == null || response.getPhotos().getPhoto() == null || response.getPhotos().getPhoto().isEmpty()) {
+                if (location.hasCoordinates()) {
+                    System.out.println("         ⚠️ Flickr returned 0 photos for tagged geo query sort=" + sortOrder +
+                            " lat=" + location.getLatitude() + " lon=" + location.getLongitude() + " radius=" + location.getRadiusKm());
+                } else {
+                    System.out.println("         ⚠️ Flickr returned 0 photos for tagged geo query sort=" + sortOrder +
+                            " bbox=" + GTA_MIN_LNG + "," + GTA_MIN_LAT + "," + GTA_MAX_LNG + "," + GTA_MAX_LAT);
+                }
+            }
+            return response.getPhotos() != null ? response.getPhotos().getPhoto() : new ArrayList<>();
+        } catch (Exception e) {
+            System.err.println("         ❌ Error searching tagged geo: " + e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
     private List<FlickrPhoto> searchPhotos(String apiKey, TargetLocation location, String sortOrder) {
         try {
             StringBuilder url = new StringBuilder(FLICKR_API_BASE);
@@ -440,53 +665,53 @@ public class FlickrSeedService {
         }
     }
 
-    private List<FlickrPhoto> searchGroup(String apiKey, TargetLocation location, String groupId) {
-        try {
-            StringBuilder url = new StringBuilder(FLICKR_API_BASE);
-            url.append("?method=flickr.photos.search");
-            url.append("&api_key=").append(apiKey);
-            url.append("&group_id=").append(groupId);
-            url.append("&text=").append(URLEncoder.encode(buildLocalText(location), StandardCharsets.UTF_8));
-            url.append("&sort=relevance");
-            url.append("&per_page=50");
-            url.append("&page=1");
-            url.append("&extras=").append(EXTRAS);
-            url.append("&has_geo=1");
-            url.append("&safe_search=1");
-            url.append("&format=json");
-            url.append("&nojsoncallback=1");
-            if (location.hasCoordinates()) {
-                url.append("&lat=").append(location.getLatitude());
-                url.append("&lon=").append(location.getLongitude());
-                url.append("&radius=").append(location.getRadiusKm());
-                url.append("&radius_units=km");
-                url.append("&accuracy=11");
-            } else {
-                url.append("&bbox=").append(GTA_MIN_LNG).append(",").append(GTA_MIN_LAT).append(",").append(GTA_MAX_LNG).append(",").append(GTA_MAX_LAT);
-            }
+        private List<FlickrPhoto> searchGroup(String apiKey, TargetLocation location, String groupId) {
+            try {
+                StringBuilder url = new StringBuilder(FLICKR_API_BASE);
+                url.append("?method=flickr.photos.search");
+                url.append("&api_key=").append(apiKey);
+                url.append("&group_id=").append(groupId);
+                url.append("&text=").append(URLEncoder.encode(buildLocalText(location), StandardCharsets.UTF_8));
+                url.append("&sort=relevance");
+                url.append("&per_page=50");
+                url.append("&page=1");
+                url.append("&extras=").append(EXTRAS);
+                url.append("&has_geo=1");
+                url.append("&safe_search=1");
+                url.append("&format=json");
+                url.append("&nojsoncallback=1");
+                if (location.hasCoordinates()) {
+                    url.append("&lat=").append(location.getLatitude());
+                    url.append("&lon=").append(location.getLongitude());
+                    url.append("&radius=").append(location.getRadiusKm());
+                    url.append("&radius_units=km");
+                    url.append("&accuracy=11");
+                } else {
+                    url.append("&bbox=").append(GTA_MIN_LNG).append(",").append(GTA_MIN_LAT).append(",").append(GTA_MAX_LNG).append(",").append(GTA_MAX_LAT);
+                }
 
-            FlickrResponse response = restTemplate.getForObject(url.toString(), FlickrResponse.class);
-            if (response == null || !"ok".equals(response.getStat())) {
-                return new ArrayList<>();
+                FlickrResponse response = restTemplate.getForObject(url.toString(), FlickrResponse.class);
+                if (response == null || !"ok".equals(response.getStat())) {
+                    return new ArrayList<>();
+                }
+                return response.getPhotos() != null ? response.getPhotos().getPhoto() : new ArrayList<>();
+                } catch (Exception e) {
+                    System.err.println("         ❌ Error searching group: " + e.getMessage());
+                    return new ArrayList<>();
+                }
             }
-            return response.getPhotos() != null ? response.getPhotos().getPhoto() : new ArrayList<>();
-            } catch (Exception e) {
-                System.err.println("         ❌ Error searching group: " + e.getMessage());
-                return new ArrayList<>();
-            }
+    private int addUniquePhotos(List<FlickrPhoto> newPhotos, List<FlickrPhoto> allPhotos, Set<String> seenIds) {
+    int added = 0;
+    for (FlickrPhoto photo : newPhotos) {
+        if (photo.getId() != null && !seenIds.contains(photo.getId())) {
+            seenIds.add(photo.getId());
+            allPhotos.add(photo);
+            added++;
         }
-
-        private int addUniquePhotos(List<FlickrPhoto> newPhotos, List<FlickrPhoto> allPhotos, Set<String> seenIds) {
-        int added = 0;
-        for (FlickrPhoto photo : newPhotos) {
-            if (photo.getId() != null && !seenIds.contains(photo.getId())) {
-                seenIds.add(photo.getId());
-                allPhotos.add(photo);
-                added++;
-            }
-        }
-        return added;
     }
+    return added;
+   }
+
     private FilterOutcome filterForQuality(TargetLocation location, List<FlickrPhoto> photos) {
         List<FlickrPhoto> filtered = new ArrayList<>();
         int missingGeo = 0;
@@ -585,6 +810,32 @@ public class FlickrSeedService {
         return result.isEmpty() ? null : result.get(0);
     }
 
+    private UUID upsertAreaLandmark(AreaConfig area, String coverUrl, int photoCount) {
+        String sql = "INSERT INTO spots (name, lat, lng, geom, photo_url, source, source_id, score, categories, description) " +
+                "VALUES (?, ?, ?, ST_SetSRID(ST_MakePoint(?, ?), 4326), ?, 'flickr', ?, ?, ARRAY['area'], ?) " +
+                "ON CONFLICT (source, source_id) DO UPDATE SET " +
+                "name = EXCLUDED.name, lat = EXCLUDED.lat, lng = EXCLUDED.lng, geom = EXCLUDED.geom, " +
+                "photo_url = EXCLUDED.photo_url, score = EXCLUDED.score, categories = EXCLUDED.categories, description = EXCLUDED.description " +
+                "RETURNING id";
+
+        double score = Math.min((double) photoCount / 100.0, 1.0);
+        String description = "Area seeded from Flickr with " + photoCount + " photos";
+
+        List<UUID> result = jdbcTemplate.query(sql,
+                (rs, rowNum) -> (UUID) rs.getObject("id"),
+                area.getName(),
+                area.getLat(),
+                area.getLng(),
+                area.getLng(),
+                area.getLat(),
+                coverUrl,
+                "area:" + area.getKey(),
+                score,
+                description);
+
+        return result.isEmpty() ? null : result.get(0);
+    }
+
     private Map<String, UUID> upsertHotspots(TargetLocation location, String placeSlug, UUID landmarkId, Map<String, List<FlickrPhoto>> clusters) {
         Map<String, UUID> hotspotIds = new HashMap<>();
         int index = 1;
@@ -614,6 +865,45 @@ public class FlickrSeedService {
                     center[0],
                     hotspotSlug,
                     landmarkId,
+                    description,
+                    coverUrl);
+
+            if (!ids.isEmpty()) {
+                hotspotIds.put(key, ids.get(0));
+            }
+        }
+        return hotspotIds;
+    }
+
+    private Map<String, UUID> upsertAreaHotspots(AreaConfig area, UUID areaLandmarkId, Map<String, List<FlickrPhoto>> clusters) {
+        Map<String, UUID> hotspotIds = new HashMap<>();
+        int index = 1;
+        for (Map.Entry<String, List<FlickrPhoto>> entry : clusters.entrySet()) {
+            String key = entry.getKey();
+            List<FlickrPhoto> clusterPhotos = entry.getValue();
+            double[] center = computeClusterCenter(clusterPhotos);
+            String hotspotSlug = String.format("area:%s:hotspot:%s", area.getKey(), key);
+            String hotspotName = String.format("Hotspot: %s #%d", area.getName(), index++);
+
+            String sql = "INSERT INTO spots (name, lat, lng, geom, source, source_id, categories, parent_spot_id, description, photo_url) " +
+                    "VALUES (?, ?, ?, ST_SetSRID(ST_MakePoint(?, ?), 4326), 'flickr', ?, ARRAY['hotspot'], ?, ?, ?) " +
+                    "ON CONFLICT (source, source_id) DO UPDATE SET " +
+                    "name = EXCLUDED.name, lat = EXCLUDED.lat, lng = EXCLUDED.lng, geom = EXCLUDED.geom, " +
+                    "categories = EXCLUDED.categories, parent_spot_id = EXCLUDED.parent_spot_id, description = EXCLUDED.description, photo_url = EXCLUDED.photo_url " +
+                    "RETURNING id";
+
+            String description = "Area hotspot cluster for " + area.getName() + " with " + clusterPhotos.size() + " photos";
+            String coverUrl = chooseDisplayUrl(clusterPhotos.get(0));
+
+            List<UUID> ids = jdbcTemplate.query(sql,
+                    (rs, rowNum) -> (UUID) rs.getObject("id"),
+                    hotspotName,
+                    center[0],
+                    center[1],
+                    center[1],
+                    center[0],
+                    hotspotSlug,
+                    areaLandmarkId,
                     description,
                     coverUrl);
 
@@ -943,6 +1233,66 @@ public class FlickrSeedService {
                         LinkedHashMap::new));
     }
 
+    private Map<String, List<FlickrPhoto>> clusterAreaPhotos(List<FlickrPhoto> photos) {
+        Map<String, List<FlickrPhoto>> grouped = new HashMap<>();
+        for (FlickrPhoto photo : photos) {
+            double rLat = roundToPrecision(photo.getLatitude(), HOTSPOT_PRECISION);
+            double rLng = roundToPrecision(photo.getLongitude(), HOTSPOT_PRECISION);
+            String key = formattedKey(rLat, rLng);
+            grouped.computeIfAbsent(key, k -> new ArrayList<>()).add(photo);
+        }
+
+        int total = photos.size();
+        int minPhotos = total < 150 ? 2 : MIN_PHOTOS_PER_HOTSPOT;
+
+        List<ClusterCandidate> scored = new ArrayList<>();
+        for (Map.Entry<String, List<FlickrPhoto>> entry : grouped.entrySet()) {
+            List<FlickrPhoto> cluster = entry.getValue();
+            if (cluster.size() < minPhotos) {
+                continue;
+            }
+            double[] center = computeClusterCenter(cluster);
+            long viewsSum = cluster.stream().mapToLong(p -> Math.max(p.getViews(), 0)).sum();
+            Set<String> owners = cluster.stream()
+                    .map(FlickrPhoto::getOwnerName)
+                    .filter(StringUtils::hasText)
+                    .collect(Collectors.toSet());
+
+            double score = (cluster.size() * 1.0) + (Math.log10(viewsSum + 1) * 2.0) + (Math.min(owners.size(), 10) * 0.5);
+            scored.add(new ClusterCandidate(entry.getKey(), cluster, center, score));
+        }
+
+        scored.sort(Comparator
+            .comparingDouble((ClusterCandidate c) -> c.score)
+            .reversed()
+            .thenComparing((ClusterCandidate c) -> c.photos.size(), Comparator.reverseOrder()));
+
+        Map<String, List<FlickrPhoto>> accepted = new LinkedHashMap<>();
+        List<double[]> acceptedCenters = new ArrayList<>();
+        for (ClusterCandidate candidate : scored) {
+            boolean tooClose = false;
+            for (double[] center : acceptedCenters) {
+                double dist = haversineMeters(center[0], center[1], candidate.center[0], candidate.center[1]);
+                if (dist < MIN_HOTSPOT_SEPARATION_METERS) {
+                    tooClose = true;
+                    break;
+                }
+            }
+            if (tooClose) {
+                continue;
+            }
+
+            String key = formattedKey(candidate.center[0], candidate.center[1]);
+            accepted.put(key, candidate.photos);
+            acceptedCenters.add(candidate.center);
+            if (accepted.size() >= MAX_HOTSPOTS_PER_AREA) {
+                break;
+            }
+        }
+
+        return accepted;
+    }
+
     private Map<String, List<FlickrPhoto>> trimClusters(Map<String, List<FlickrPhoto>> clusters) {
         Map<String, List<FlickrPhoto>> trimmed = new LinkedHashMap<>();
         for (Map.Entry<String, List<FlickrPhoto>> entry : clusters.entrySet()) {
@@ -956,9 +1306,26 @@ public class FlickrSeedService {
 
     private List<FlickrPhoto> selectTopPhotosForHotspot(List<FlickrPhoto> photos) {
         List<FlickrPhoto> sorted = new ArrayList<>(photos);
-        sorted.sort(Comparator.comparingInt(FlickrPhoto::getViews).reversed());
-        int limit = Math.min(sorted.size(), MAX_PHOTOS_PER_HOTSPOT);
-        return sorted.subList(0, limit);
+        sorted.sort(Comparator
+                .comparingInt(FlickrPhoto::getViews)
+                .reversed()
+                .thenComparing((FlickrPhoto p) -> hasLargeUrl(p) ? 0 : 1));
+
+        List<FlickrPhoto> deduped = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (FlickrPhoto p : sorted) {
+            if (p.getId() != null && !seen.contains(p.getId())) {
+                seen.add(p.getId());
+                deduped.add(p);
+            }
+        }
+
+        int limit = Math.min(deduped.size(), MAX_PHOTOS_PER_HOTSPOT);
+        return deduped.subList(0, limit);
+    }
+
+    private boolean hasLargeUrl(FlickrPhoto photo) {
+        return StringUtils.hasText(photo.getUrlO()) || StringUtils.hasText(photo.getUrlL());
     }
 
     private String chooseDisplayUrl(FlickrPhoto photo) {
@@ -984,6 +1351,35 @@ public class FlickrSeedService {
             sb.append(" Ontario");
         }
         return sb.toString().trim();
+    }
+
+    private List<TargetLocation> buildTiles(AreaConfig area) {
+        double metersPerDegLat = 111320.0;
+        double metersPerDegLng = 111320.0 * Math.cos(Math.toRadians(area.getLat()));
+        double radiusMeters = area.getRadiusKm() * 1000.0;
+        double spacing = area.getTileSpacingMeters();
+
+        List<TargetLocation> tiles = new ArrayList<>();
+        for (double dy = -radiusMeters; dy <= radiusMeters; dy += spacing) {
+            for (double dx = -radiusMeters; dx <= radiusMeters; dx += spacing) {
+                double dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist > radiusMeters) {
+                    continue;
+                }
+                double lat = area.getLat() + (dy / metersPerDegLat);
+                double lng = area.getLng() + (dx / metersPerDegLng);
+                String name = area.getName() + " tile " + (tiles.size() + 1);
+                tiles.add(new TargetLocation(name, lat, lng, area.getTileRadiusKm()));
+            }
+        }
+
+        if (tiles.size() > 60) {
+            tiles.sort(Comparator.comparingDouble(t -> haversineMeters(area.getLat(), area.getLng(), t.getLatitude(), t.getLongitude())));
+            tiles = new ArrayList<>(tiles.subList(0, 60));
+            System.out.println("   ⚠️  Tile count capped at 60 (consider increasing spacing)");
+        }
+
+        return tiles;
     }
 
     private Set<String> buildLocationTokens(TargetLocation location) {

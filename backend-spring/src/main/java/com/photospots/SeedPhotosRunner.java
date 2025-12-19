@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.photospots.service.AreaConfig;
 import com.photospots.service.FlickrSeedService;
 import com.photospots.service.FlickrSeedService.SeedResult;
 import com.photospots.service.TargetLocation;
@@ -40,8 +41,10 @@ public class SeedPhotosRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
-        // Check if seed argument is passed, otherwise skip
-        if (!args.containsOption("seed")) {
+        boolean areaMode = args.containsOption("seed-area");
+        boolean landmarkMode = args.containsOption("seed");
+
+        if (!areaMode && !landmarkMode) {
             return;
         }
 
@@ -67,6 +70,42 @@ public class SeedPhotosRunner implements ApplicationRunner {
         System.out.println();
         System.out.println("   • Vision filter: " + (visionEnabled ? "enabled" : "disabled"));
         System.out.println();
+
+        if (areaMode) {
+            List<String> areaValues = args.getOptionValues("seed-area");
+            if (areaValues == null || areaValues.isEmpty()) {
+                System.out.println("⚠️  seed-area provided without a key, skipping");
+                return;
+            }
+            String areaKey = areaValues.get(0);
+            List<AreaConfig> areas = loadAreas();
+            AreaConfig targetArea = areas.stream()
+                    .filter(a -> a.getKey().equalsIgnoreCase(areaKey))
+                    .findFirst()
+                    .orElse(null);
+            if (targetArea == null) {
+                System.out.println("⚠️  Area key not found: " + areaKey);
+                return;
+            }
+
+            System.out.println("📋 Area Target: " + targetArea.getName() + " (" + targetArea.getKey() + ")");
+            SeedResult areaResult = flickrSeedService.seedArea(targetArea, visionEnabled);
+
+            System.out.println();
+            System.out.println("╔══════════════════════════════════════════════════════════════════╗");
+            System.out.println("║                    🎉 AREA SEED COMPLETE!                        ║");
+            System.out.println("╚══════════════════════════════════════════════════════════════════╝");
+            System.out.println();
+            System.out.println("📊 Summary:");
+            System.out.println("   • Area: " + targetArea.getName());
+            System.out.println("   • Total photos attempted: " + areaResult.getPhotosAttempted());
+            System.out.println("   • Total photos inserted: " + areaResult.getInsertedPhotos());
+            System.out.println("   • Conflict-skipped (existing): " + areaResult.getConflictSkipped());
+            System.out.println("   • Failed inserts (exceptions): " + areaResult.getFailedInsert());
+            System.out.println("   • Hotspot spots upserted: " + areaResult.getHotspotUpserts());
+            System.out.println();
+            return;
+        }
 
         // Load target locations from JSON (configurable)
         List<TargetLocation> targetLocations = loadTargetLocations();
@@ -163,6 +202,16 @@ public class SeedPhotosRunner implements ApplicationRunner {
             return mapper.readValue(is, new TypeReference<List<TargetLocation>>() {});
         } catch (Exception ex) {
             System.err.println("⚠️  Failed to load locations.json, falling back to empty list: " + ex.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    private List<AreaConfig> loadAreas() {
+        try (InputStream is = new ClassPathResource("seed/areas.json").getInputStream()) {
+            ObjectMapper mapper = new ObjectMapper();
+            return mapper.readValue(is, new TypeReference<List<AreaConfig>>() {});
+        } catch (Exception ex) {
+            System.err.println("⚠️  Failed to load areas.json, falling back to empty list: " + ex.getMessage());
             return new ArrayList<>();
         }
     }
