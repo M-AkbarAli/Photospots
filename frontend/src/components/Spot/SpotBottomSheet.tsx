@@ -136,6 +136,30 @@ export function SpotBottomSheet({
 
   if (!spotId) return null;
 
+  const headerMetaChildren = useMemo(() => {
+    const items: React.ReactNode[] = [];
+
+    if (spot?.distanceMeters) {
+      items.push(
+        <Text key="distance" style={styles.distance}>
+          {formatDistance(spot.distanceMeters)}
+        </Text>
+      );
+    }
+
+    if (spot?.categories.length) {
+      items.push(
+        <CategoryChips
+          key="categories"
+          categories={spot.categories}
+          maxDisplay={1}
+        />
+      );
+    }
+
+    return items;
+  }, [spot]);
+
   return (
     <BottomSheet
       ref={bottomSheetRef}
@@ -169,16 +193,7 @@ export function SpotBottomSheet({
                 <Text style={styles.title} numberOfLines={1}>
                   {spot.name}
                 </Text>
-                <View style={styles.headerMeta}>
-                  {spot.distanceMeters && (
-                    <Text style={styles.distance}>
-                      {formatDistance(spot.distanceMeters)}
-                    </Text>
-                  )}
-                  {spot.categories.length > 0 && (
-                    <CategoryChips categories={spot.categories} maxDisplay={1} />
-                  )}
-                </View>
+                <View style={styles.headerMeta}>{headerMetaChildren}</View>
               </View>
               {spot.photoUrl && currentSnapIndex === 0 && (
                 <Image

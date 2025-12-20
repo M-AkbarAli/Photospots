@@ -12,8 +12,9 @@ platform :ios, podfile_properties['ios.deploymentTarget'] || '15.1'
 
 prepare_react_native_project!
 
-# @generated begin @rnmapbox/maps-rnmapboxmapsimpl - expo prebuild (DO NOT MODIFY) sync-79f20273690e459f3a44f8bb773764f09e870500
+# @generated begin @rnmapbox/maps-rnmapboxmapsimpl - expo prebuild (DO NOT MODIFY) sync-e5553c831f424a10a45ebbc3cd44118edcd72c6d
 $RNMapboxMapsDownloadToken = 'sk.eyJ1IjoibWFrYmFyYWxpIiwiYSI6ImNtZnNvYzgydDA3d3oya29ldHdvZGthMGUifQ.oKMgorguRUzYRIUsU86USQ'
+$RNMapboxMapsVersion = '11.8.0'
 # @generated end @rnmapbox/maps-rnmapboxmapsimpl
 target 'Photospots' do
   use_expo_modules!

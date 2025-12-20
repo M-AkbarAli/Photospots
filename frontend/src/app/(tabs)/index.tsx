@@ -26,6 +26,11 @@ Mapbox.setAccessToken(
   process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN || 'pk.demo_token'
 );
 
+// NOTE: The "[MapboxCommon] Invalid size" warning during app launch is a known
+// harmless issue in @rnmapbox/maps. It occurs at the native iOS level before
+// React Native's layout system provides dimensions. The map displays correctly
+// after the initial frame. See: https://github.com/rnmapbox/maps/issues/3876
+
 // Toronto fallback
 const TORONTO_COORDS: [number, number] = [-79.3832, 43.6532];
 const DEFAULT_ZOOM = 13;
@@ -109,18 +114,38 @@ export default function MapScreen() {
             setUserCoordinates(TORONTO_COORDS);
           }
         } else {
-          // Get current location
-          const location = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.Balanced,
-          });
 
-          if (mounted && location?.coords) {
-            coords = [
-              location.coords.longitude,
-              location.coords.latitude,
-            ];
-            setUserCoordinates(coords);
-            setMapCenter(coords);
+          // Get current location with timeout
+          try {
+            const location = await Promise.race([
+              Location.getCurrentPositionAsync({
+                accuracy: Location.Accuracy.Balanced,
+              }),
+              new Promise((_, reject) =>
+                setTimeout(
+                  () => reject(new Error('Location timeout')),
+                  5000
+                )
+              ),
+            ]);
+
+            if (mounted && location?.coords) {
+              coords = [
+                location.coords.longitude,
+                location.coords.latitude,
+              ];
+              console.log('User location obtained:', coords);
+              setUserCoordinates(coords);
+              setMapCenter(coords);
+            }
+          } catch (locError) {
+            console.warn('Failed to get current location:', locError);
+            // Keep using TORONTO_COORDS as fallback
+            if (mounted) {
+              console.log('Using fallback location (Toronto)');
+              setUserCoordinates(TORONTO_COORDS);
+              setMapCenter(TORONTO_COORDS);
+            }
           }
         }
 
@@ -178,6 +203,17 @@ export default function MapScreen() {
       }
     }
   }, [params.selectedSpotId, params.centerLng, params.centerLat]);
+
+  useEffect(() => {
+    if (userCoordinates) {
+      cameraRef.current?.setCamera({
+        centerCoordinate: userCoordinates,
+        zoomLevel: DEFAULT_ZOOM,
+        animationDuration: 600,
+      });
+      setMapCenter(userCoordinates);
+    }
+  }, [userCoordinates]);
 
   // Handle "Search this area" press
   const handleSearchThisArea = useCallback(() => {
@@ -268,73 +304,72 @@ export default function MapScreen() {
 
   return (
     <GestureHandlerRootView style={styles.container}>
-      <View style={styles.container}>
-        <Mapbox.MapView
-          style={styles.map}
-          styleURL={Mapbox.StyleURL.Street}
-          onCameraChanged={handleCameraChanged}
-          onMapIdle={handleMapIdle}
-        >
-          <Mapbox.Camera
-            ref={cameraRef}
-            centerCoordinate={mapCenter}
-            zoomLevel={DEFAULT_ZOOM}
-          />
+      <Mapbox.MapView
+        style={styles.map}
+        styleURL={Mapbox.StyleURL.Street}
+        onCameraChanged={handleCameraChanged}
+        onMapIdle={handleMapIdle}
+        logoEnabled={false}
+        attributionEnabled={false}
+      >
+        <Mapbox.Camera
+          ref={cameraRef}
+          defaultSettings={{
+            centerCoordinate: mapCenter,
+            zoomLevel: DEFAULT_ZOOM,
+          }}
+        />
 
-          {/* User location indicator */}
-          <Mapbox.LocationPuck puckBearingEnabled puckBearing="heading" />
+        {/* Spot markers */}
+        <SpotLayers
+          ref={spotLayersRef}
+          spots={spots}
+          selectedSpotId={selectedSpotId}
+          onSpotSelect={handleSpotSelect}
+          onClusterTap={handleClusterTap}
+        />
+      </Mapbox.MapView>
 
-          {/* Spot markers */}
-          <SpotLayers
-            ref={spotLayersRef}
-            spots={spots}
-            selectedSpotId={selectedSpotId}
-            onSpotSelect={handleSpotSelect}
-            onClusterTap={handleClusterTap}
-          />
-        </Mapbox.MapView>
-
-        {/* Location denied banner */}
-        {locationDenied && (
-          <View style={styles.locationBanner}>
-            <Text style={styles.locationBannerText}>
-              Using default location — enable location for nearby spots.
-            </Text>
-          </View>
-        )}
-
-        {/* Error banner */}
-        {errorBanner && (
-          <View style={styles.errorBanner}>
-            <Text style={styles.errorBannerText}>{errorBanner}</Text>
-          </View>
-        )}
-
-        {/* Top search pill */}
-        <View style={styles.topPillContainer}>
-          <SearchPill onPress={handleSearchPress} />
+      {/* Location denied banner */}
+      {locationDenied && (
+        <View style={styles.locationBanner}>
+          <Text style={styles.locationBannerText}>
+            Using default location — enable location for nearby spots.
+          </Text>
         </View>
+      )}
 
-        {/* Search this area pill */}
-        {showSearchPill && (
-          <View style={styles.searchAreaContainer}>
-            <SearchThisAreaPill
-              onPress={handleSearchThisArea}
-              isLoading={isSearching}
-            />
-          </View>
-        )}
+      {/* Error banner */}
+      {errorBanner && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>{errorBanner}</Text>
+        </View>
+      )}
 
-        {/* Spot bottom sheet */}
-        {selectedSpotId && (
-          <SpotBottomSheet
-            spotId={selectedSpotId}
-            initialSpot={selectedSpot}
-            bottomSheetRef={bottomSheetRef}
-            onClose={handleBottomSheetClose}
-          />
-        )}
+      {/* Top search pill */}
+      <View style={styles.topPillContainer}>
+        <SearchPill onPress={handleSearchPress} />
       </View>
+
+      {/* Search this area pill */}
+      {showSearchPill && (
+        <View style={styles.searchAreaContainer}>
+          <SearchThisAreaPill
+            onPress={handleSearchThisArea}
+            isLoading={isSearching}
+          />
+        </View>
+      )}
+
+      {/* Spot bottom sheet */}
+      {selectedSpotId && (
+        <SpotBottomSheet
+          spotId={selectedSpotId}
+          initialSpot={selectedSpot}
+          bottomSheetRef={bottomSheetRef}
+          onClose={handleBottomSheetClose}
+        />
+      )}
     </GestureHandlerRootView>
   );
 }
@@ -342,10 +377,10 @@ export default function MapScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#fff',
   },
   map: {
-    flex: 1,
-    width: '100%',
+    ...StyleSheet.absoluteFillObject,
   },
   locationBanner: {
     position: 'absolute',

@@ -72,15 +72,13 @@ PODS:
   - hermes-engine (0.81.4):
     - hermes-engine/Pre-built (= 0.81.4)
   - hermes-engine/Pre-built (0.81.4)
-  - MapboxCommon (23.11.4)
-  - MapboxCoreMaps (10.19.2):
-    - MapboxCommon (~> 23.11)
-  - MapboxMaps (10.19.4):
-    - MapboxCommon (= 23.11.4)
-    - MapboxCoreMaps (= 10.19.2)
-    - MapboxMobileEvents (= 2.0.0)
-    - Turf (= 2.8.0)
-  - MapboxMobileEvents (2.0.0)
+  - MapboxCommon (24.8.0)
+  - MapboxCoreMaps (11.8.0):
+    - MapboxCommon (~> 24.8)
+  - MapboxMaps (11.8.0):
+    - MapboxCommon (= 24.8.0)
+    - MapboxCoreMaps (= 11.8.0)
+    - Turf (= 3.0.0)
   - RCTDeprecation (0.81.4)
   - RCTRequired (0.81.4)
   - RCTTypeSafety (0.81.4):
@@ -1824,14 +1822,14 @@ PODS:
     - ReactNativeDependencies
     - Yoga
   - rnmapbox-maps (10.1.45):
-    - MapboxMaps (~> 10.19.0)
+    - MapboxMaps (= 11.8.0)
     - React
     - React-Core
     - rnmapbox-maps/DynamicLibrary (= 10.1.45)
     - Turf
   - rnmapbox-maps/DynamicLibrary (10.1.45):
     - hermes-engine
-    - MapboxMaps (~> 10.19.0)
+    - MapboxMaps (= 11.8.0)
     - RCTRequired
     - RCTTypeSafety
     - React
@@ -2042,7 +2040,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - Turf (2.8.0)
+  - Turf (3.0.0)
   - Yoga (0.0.0)
 
 DEPENDENCIES:
@@ -2139,7 +2137,6 @@ SPEC REPOS:
     - MapboxCommon
     - MapboxCoreMaps
     - MapboxMaps
-    - MapboxMobileEvents
     - Turf
 
 EXTERNAL SOURCES:
@@ -2332,10 +2329,9 @@ SPEC CHECKSUMS:
   ExpoWebBrowser: 533bc2a1b188eec1c10e4926decf658f1687b5e5
   FBLazyVector: 9e0cd874afd81d9a4d36679daca991b58b260d42
   hermes-engine: 35c763d57c9832d0eef764316ca1c4d043581394
-  MapboxCommon: cc47fafe3fe5408ca49240aa80fa64f27f275711
-  MapboxCoreMaps: 35685edba03e44468aed57c3dfd7f8795edafda8
-  MapboxMaps: f87023cf0d72b180b40ea0b6fb4b2d7db6b73b71
-  MapboxMobileEvents: d044b9edbe0ec7df60f6c2c9634fe9a7f449266b
+  MapboxCommon: 95fe03b74d0d0ca39dc646ca14862deb06875151
+  MapboxCoreMaps: f2a82182c5f6c6262220b81547c6df708012932b
+  MapboxMaps: dbe1869006c5918d62efc6b475fb884947ea2ecd
   RCTDeprecation: 7487d6dda857ccd4cb3dd6ecfccdc3170e85dcbc
   RCTRequired: 54128b7df8be566881d48c7234724a78cb9b6157
   RCTTypeSafety: d2b07797a79e45d7b19e1cd2f53c79ab419fe217
@@ -2403,13 +2399,13 @@ SPEC CHECKSUMS:
   ReactNativeDependencies: ed6d1e64802b150399f04f1d5728ec16b437251e
   RNCAsyncStorage: 3a4f5e2777dae1688b781a487923a08569e27fe4
   RNGestureHandler: e0d0bce5599f6120b7adf90c38d2805e2935795f
-  rnmapbox-maps: 416b13ec07892fd7a8b7b06c64a9d309c40b7bb2
+  rnmapbox-maps: a446b02b6562910d86af2c6e6c79e37ae2f4af6f
   RNReanimated: d87360cba850e1df46f5b74d6ee74653a520b631
   RNScreens: d8d6f1792f6e7ac12b0190d33d8d390efc0c1845
   RNWorklets: 76fce72926e28e304afb44f0da23b2d24f2c1fa0
-  Turf: aa2ede4298009639d10db36aba1a7ebaad072a5e
+  Turf: a1604e74adce15c58462c9ae2acdbf049d5be35e
   Yoga: 051f086b5ccf465ff2ed38a2cf5a558ae01aaaa1
 
-PODFILE CHECKSUM: 6bfce21b4ba97887b4fd9adc9ab9d0e46128b41e
+PODFILE CHECKSUM: a1d71caaeb916f9dcad35d9e9857bc95406902c6
 
 COCOAPODS: 1.16.2
