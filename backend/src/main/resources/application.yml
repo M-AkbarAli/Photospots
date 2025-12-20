@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: photospots-backend
+  datasource:
+    url: jdbc:postgresql://localhost:5432/photospots
+    username: photospots
+    password: photospots
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true
+    show-sql: false
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+aws:
+  region: us-east-1
+  s3:
+    bucket: your-photospots-bucket
+
+flickr:
+  api-key: ${FLICKR_API_KEY:}
+  api-secret: ${FLICKR_API_SECRET:}
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:change-me}
+    access-token-seconds: 3600
+    refresh-token-seconds: 1209600
+  cache:
+    nearby-seconds: 300
+    spot-seconds: 600
+    search-seconds: 180
+    hotspots-seconds: 300
+    photos-seconds: 600
+  rate-limit:
+    window-ms: 900000
+    max-requests: 100

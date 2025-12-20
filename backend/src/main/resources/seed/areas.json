@@ -1,0 +1,11 @@
+[
+  {
+    "key": "stc",
+    "name": "Scarborough Town Centre Area",
+    "lat": 43.7755,
+    "lng": -79.2578,
+    "radiusKm": 4.0,
+    "tileSpacingMeters": 900,
+    "tileRadiusKm": 1.2
+  }
+]
