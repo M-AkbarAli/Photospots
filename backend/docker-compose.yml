@@ -11,7 +11,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - backend-spring_pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U photospots"]
       interval: 10s
@@ -30,4 +30,5 @@ services:
       retries: 5
 
 volumes:
-  pgdata:
+  backend-spring_pgdata:
+    external: true
