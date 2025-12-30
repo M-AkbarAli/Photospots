@@ -246,7 +246,7 @@ export default function PhotoGalleryScreen() {
       <View style={styles.header}>
         <Pressable style={styles.backButtonInline} onPress={handleBack}>
           <View style={[styles.iconBackground, { backgroundColor: theme.CARD }]}>
-            <Ionicons name="arrow-back" size={20} color={theme.ACCENT} />
+            <Ionicons name="arrow-back" size={24} color={theme.ACCENT} />
           </View>
           <Text style={[styles.backButtonLabel, { color: theme.TEXT }]}>Back</Text>
         </Pressable>
@@ -283,7 +283,7 @@ export default function PhotoGalleryScreen() {
           <SafeAreaView style={styles.modalContent}>
             {/* Close button */}
             <Pressable style={styles.modalCloseButton} onPress={closePhotoModal}>
-              <Ionicons name="close" size={28} color="#FFF" />
+              <Ionicons name="close" size={32} color="#FFF" />
             </Pressable>
 
             {/* Image */}
@@ -375,7 +375,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: GRID_PADDING,
-    paddingVertical: 12,
+    paddingTop: 20,
+    paddingBottom: 12,
   },
   headerTitle: {
     fontSize: 16,
@@ -391,8 +392,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   iconBackground: {
-    borderRadius: 20,
-    padding: 8,
+    borderRadius: 24,
+    padding: 10,
   },
   backButtonAbsolute: {
     position: 'absolute',
@@ -436,10 +437,12 @@ const styles = StyleSheet.create({
   },
   modalCloseButton: {
     position: 'absolute',
-    top: 16,
+    top: 60,
     right: 16,
     zIndex: 10,
-    padding: 8,
+    padding: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 24,
   },
   modalImageContainer: {
     flex: 1,

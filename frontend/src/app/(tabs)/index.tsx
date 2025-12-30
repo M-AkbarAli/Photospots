@@ -37,13 +37,13 @@ Mapbox.setAccessToken(mapboxToken || '');
 
 // Toronto fallback
 const TORONTO_COORDS: [number, number] = [-79.3832, 43.6532];
-const DEFAULT_ZOOM = 13;
-const SEARCH_RADIUS_METERS = 2500; // 2.5km radius for landmark-first experience
+const DEFAULT_ZOOM = 11.5;
+const SEARCH_RADIUS_METERS = 5000; // 5km radius for landmark-first experience
 const DISTANCE_THRESHOLD_METERS = 400;
 const ZOOM_THRESHOLD = 1.0;
 
-// Always use dark map style
-const DARK_STYLE_URL = 'mapbox://styles/makbarali/cmjru8opm000d01s2f9y80ii7';
+// Use the custom Warm map style (hosted on Mapbox)
+const WARM_STYLE_URL = 'mapbox://styles/makbarali/cmjru8opm000d01s2f9y80ii7';
 
 export default function MapScreen() {
   const router = useRouter();
@@ -55,7 +55,7 @@ export default function MapScreen() {
   }>();
 
   useEffect(() => {
-    console.log('[Map] styleURL', DARK_STYLE_URL);
+    console.log('[Map] styleURL', WARM_STYLE_URL);
     console.log('[Map] token set', !!mapboxToken);
   }, []);
 
@@ -177,10 +177,8 @@ export default function MapScreen() {
         if (mounted) {
           setIsInitialized(true);
 
-          // Auto-fetch only on first ever run
-          if (!hasFetched) {
-            await performFetch(coords, DEFAULT_ZOOM);
-          }
+          // Auto-fetch landmarks on app load
+          await performFetch(coords, DEFAULT_ZOOM);
         }
       } catch (error) {
         console.warn('Initialization error:', error);
@@ -324,7 +322,7 @@ export default function MapScreen() {
     <GestureHandlerRootView style={[styles.container, { backgroundColor: theme.BG }]}>
       <Mapbox.MapView
         style={styles.map}
-        styleURL={DARK_STYLE_URL}
+        styleURL={WARM_STYLE_URL}
         onCameraChanged={handleCameraChanged}
         onMapIdle={handleMapIdle}
         onDidFinishLoadingStyle={() => console.log('[Map] style loaded')}

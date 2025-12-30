@@ -20,6 +20,7 @@ import {
     Image,
     Keyboard,
     Linking,
+    Modal,
     Platform,
     Pressable,
     StyleSheet,
@@ -118,6 +119,10 @@ export const MainBottomSheet = forwardRef<MainBottomSheetRef, MainBottomSheetPro
     const [photos, setPhotos] = useState<Photo[]>([]);
     const [photosLoading, setPhotosLoading] = useState<LoadingState>('idle');
     const [photoErrors, setPhotoErrors] = useState(0);
+
+    // Modal state
+    const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
+    const [modalImageFailed, setModalImageFailed] = useState(false);
 
     // Search mode state
     const [searchQuery, setSearchQuery] = useState('');
@@ -223,6 +228,26 @@ export const MainBottomSheet = forwardRef<MainBottomSheetRef, MainBottomSheetPro
         Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${coordString}`);
       });
     }, []);
+
+    // Modal handlers
+    const openPhotoModal = useCallback((photo: Photo) => {
+      setSelectedPhoto(photo);
+      setModalImageFailed(false);
+    }, []);
+
+    const closePhotoModal = useCallback(() => {
+      setSelectedPhoto(null);
+    }, []);
+
+    const handleModalImageError = useCallback(() => {
+      setModalImageFailed(true);
+    }, []);
+
+    const modalImageUrl = useMemo(() => {
+      if (!selectedPhoto) return null;
+      const url = getPreferredPhotoUrl(selectedPhoto.variants);
+      return url ? normalizeImageUrl(url) : null;
+    }, [selectedPhoto]);
 
     // View all photos
     const handleViewPhotos = useCallback(() => {
@@ -488,8 +513,7 @@ export const MainBottomSheet = forwardRef<MainBottomSheetRef, MainBottomSheetPro
                   key={photo.id}
                   photo={photo}
                   theme={theme}
-                  onNavigate={() => handleNavigateToPhoto(photo)}
-                  onOpenGallery={handleViewPhotos}
+                  onPress={() => openPhotoModal(photo)}
                 />
               ))}
             </View>
@@ -505,21 +529,73 @@ export const MainBottomSheet = forwardRef<MainBottomSheetRef, MainBottomSheetPro
     );
 
     return (
-      <BottomSheet
-        ref={bottomSheetRef}
-        index={0}
-        snapPoints={snapPoints}
-        onChange={handleSheetChanges}
-        enablePanDownToClose={mode === 'details'}
-        backgroundStyle={[styles.sheetBackground, { backgroundColor: theme.CARD }]}
-        handleIndicatorStyle={[styles.handleIndicator, { backgroundColor: theme.BORDER }]}
-      >
-        <View style={styles.content}>
-          {mode === 'browse' && renderBrowseContent()}
-          {mode === 'search' && renderSearchContent()}
-          {mode === 'details' && renderDetailsContent()}
-        </View>
-      </BottomSheet>
+      <>
+        <BottomSheet
+          ref={bottomSheetRef}
+          index={0}
+          snapPoints={snapPoints}
+          onChange={handleSheetChanges}
+          enablePanDownToClose={mode === 'details'}
+          backgroundStyle={[styles.sheetBackground, { backgroundColor: theme.CARD }]}
+          handleIndicatorStyle={[styles.handleIndicator, { backgroundColor: theme.BORDER }]}
+        >
+          <View style={styles.content}>
+            {mode === 'browse' && renderBrowseContent()}
+            {mode === 'search' && renderSearchContent()}
+            {mode === 'details' && renderDetailsContent()}
+          </View>
+        </BottomSheet>
+
+        {/* Photo Modal */}
+        <Modal
+          visible={selectedPhoto !== null}
+          animationType="fade"
+          onRequestClose={closePhotoModal}
+          statusBarTranslucent
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              {/* Close button */}
+              <Pressable style={styles.modalCloseButton} onPress={closePhotoModal}>
+                <Ionicons name="close" size={32} color="#FFF" />
+              </Pressable>
+
+              {/* Image */}
+              <View style={styles.modalImageContainer}>
+                {modalImageFailed || !modalImageUrl ? (
+                  <View style={styles.modalPlaceholder}>
+                    <Ionicons name="image-outline" size={64} color="rgba(255,255,255,0.5)" />
+                    <Text style={styles.modalPlaceholderText}>Image unavailable</Text>
+                  </View>
+                ) : (
+                  <Image
+                    source={{ uri: modalImageUrl }}
+                    style={styles.modalImage}
+                    resizeMode="contain"
+                    onError={handleModalImageError}
+                  />
+                )}
+              </View>
+
+              {/* Navigate button */}
+              {selectedPhoto && (
+                <View style={styles.modalActions}>
+                  <Pressable
+                    style={[styles.navigateButton, { backgroundColor: theme.ACCENT }]}
+                    onPress={() => {
+                      handleNavigateToPhoto(selectedPhoto);
+                      closePhotoModal();
+                    }}
+                  >
+                    <Ionicons name="navigate" size={20} color="#FFF" />
+                    <Text style={styles.navigateButtonText}>Navigate to this photo spot</Text>
+                  </Pressable>
+                </View>
+              )}
+            </View>
+          </View>
+        </Modal>
+      </>
     );
   }
 );
@@ -570,13 +646,11 @@ const loggedPhotoErrors = new Set<string>();
 function PhotoTile({
   photo,
   theme,
-  onNavigate,
-  onOpenGallery,
+  onPress,
 }: {
   photo: Photo;
   theme: ReturnType<typeof useTheme>;
-  onNavigate: () => void;
-  onOpenGallery: () => void;
+  onPress: () => void;
 }) {
   const imageUrl = useMemo(() => {
     const url = getPreferredPhotoUrl(photo.variants);
@@ -584,7 +658,6 @@ function PhotoTile({
   }, [photo.variants]);
   
   const [failed, setFailed] = useState(false);
-  const [showActions, setShowActions] = useState(false);
 
   const handleImageError = useCallback(() => {
     setFailed(true);
@@ -606,7 +679,7 @@ function PhotoTile({
   return (
     <Pressable
       style={styles.photoTileContainer}
-      onPress={() => setShowActions(!showActions)}
+      onPress={onPress}
     >
       <Image
         source={{ uri: imageUrl }}
@@ -614,24 +687,6 @@ function PhotoTile({
         resizeMode="cover"
         onError={handleImageError}
       />
-      {showActions && (
-        <View style={styles.photoTileOverlay}>
-          <Pressable
-            style={[styles.photoTileAction, { backgroundColor: theme.ACCENT }]}
-            onPress={onNavigate}
-          >
-            <Ionicons name="navigate" size={16} color="#FFF" />
-            <Text style={styles.photoTileActionText}>Navigate here</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.photoTileAction, { backgroundColor: theme.CARD }]}
-            onPress={onOpenGallery}
-          >
-            <Ionicons name="expand" size={16} color={theme.TEXT} />
-            <Text style={[styles.photoTileActionText, { color: theme.TEXT }]}>Full gallery</Text>
-          </Pressable>
-        </View>
-      )}
     </Pressable>
   );
 }
@@ -847,20 +902,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
   },
-  navigateButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 12,
-    marginTop: 20,
-    gap: 8,
-  },
-  navigateButtonText: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
   photosSection: {
     marginTop: 28,
   },
@@ -961,5 +1002,58 @@ const styles = StyleSheet.create({
   seeAllText: {
     fontSize: 15,
     fontWeight: '500',
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.95)',
+  },
+  modalContent: {
+    flex: 1,
+  },
+  modalCloseButton: {
+    position: 'absolute',
+    top: 60,
+    right: 16,
+    zIndex: 10,
+    padding: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 24,
+  },
+  modalImageContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalImage: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_WIDTH,
+  },
+  modalPlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+  },
+  modalPlaceholderText: {
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: 16,
+  },
+  modalActions: {
+    paddingHorizontal: 16,
+    paddingBottom: 40,
+    paddingTop: 16,
+  },
+  navigateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 12,
+    gap: 8,
+  },
+  navigateButtonText: {
+    color: '#FFF',
+    fontWeight: '600',
+    fontSize: 16,
   },
 });
