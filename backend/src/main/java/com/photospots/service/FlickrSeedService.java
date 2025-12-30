@@ -163,15 +163,31 @@ public class FlickrSeedService {
 
     private static class VisionOutcome {
         private final Map<String, List<FlickrPhoto>> filteredClusters;
+        private final List<FlickrPhoto> filteredPhotos;
         private final Map<String, VisionResult> qaByPhotoKey;
         private final int portraitRejected;
         private final int blurryRejected;
 
+        // Constructor for cluster-based filtering
         private VisionOutcome(Map<String, List<FlickrPhoto>> filteredClusters,
                               Map<String, VisionResult> qaByPhotoKey,
                               int portraitRejected,
                               int blurryRejected) {
             this.filteredClusters = filteredClusters;
+            this.filteredPhotos = null;
+            this.qaByPhotoKey = qaByPhotoKey;
+            this.portraitRejected = portraitRejected;
+            this.blurryRejected = blurryRejected;
+        }
+
+        // Constructor for list-based filtering
+        private VisionOutcome(List<FlickrPhoto> filteredPhotos,
+                              Map<String, VisionResult> qaByPhotoKey,
+                              int portraitRejected,
+                              int blurryRejected,
+                              boolean isList) {
+            this.filteredClusters = null;
+            this.filteredPhotos = filteredPhotos;
             this.qaByPhotoKey = qaByPhotoKey;
             this.portraitRejected = portraitRejected;
             this.blurryRejected = blurryRejected;
@@ -375,19 +391,15 @@ public class FlickrSeedService {
                     0);
             }
 
-            System.out.println("      💾 Upserting landmark and hotspots...");
+            System.out.println("      💾 Upserting landmark and photos...");
             outcome = upsertLocationHierarchy(attemptLocation, filtered.qualityPhotos, visionEnabled);
-            int failedInsert = filtered.skippedByCluster + outcome.failedPhotoInserts;
+            int failedInsert = outcome.failedPhotoInserts;
             System.out.println("      🧠 Vision rejections — portraits: " + outcome.portraitRejects + ", blurry: " + outcome.blurryRejects);
             System.out.println("      📊 Counts — filtered:" + filtered.qualityPhotos.size() +
-                    " hotspots:" + outcome.hotspotUpserts +
                     " attempted:" + outcome.photosAttempted +
                     " inserted:" + outcome.photosInserted +
                     " conflict-skipped:" + outcome.conflictSkipped +
                     " failed:" + outcome.failedPhotoInserts);
-            if (outcome.fallbackUsed) {
-                System.out.println("      🛟 Fallback hotspot used (reason: no clusters)");
-            }
             System.out.println("      ✅ Inserted/updated " + outcome.photosInserted + " photos for " + attemptLocation.getName());
 
             return new SeedResult(
@@ -396,7 +408,7 @@ public class FlickrSeedService {
                     filtered.qualityPhotos.size(),
                     outcome.photosInserted,
                     outcome.landmarkUpserts,
-                    outcome.hotspotUpserts,
+                    0,
                     filtered.missingGeo,
                     filtered.missingUrl,
                     duplicateCount,
@@ -484,46 +496,38 @@ public class FlickrSeedService {
             return new SeedResult(area.getName(), totalFetched, 0, 0, 0, 0, totalMissingGeo, totalMissingUrl, duplicateCount, 0, 0, 0);
         }
 
-        Map<String, List<FlickrPhoto>> clusters = clusterAreaPhotos(allFiltered);
-        boolean fallbackUsed = false;
-        if (clusters.isEmpty()) {
-            fallbackUsed = true;
-            System.out.println("   🛟 Area fallback hotspot used (reason: no clusters)");
-            Map<String, List<FlickrPhoto>> fallback = new LinkedHashMap<>();
-            fallback.put("fallback", selectTopPhotosForHotspot(allFiltered));
-            clusters = fallback;
-        }
-
         String coverUrl = chooseDisplayUrl(allFiltered.get(0));
         UUID areaLandmarkId = upsertAreaLandmark(area, coverUrl, allFiltered.size());
         int landmarkUpserts = areaLandmarkId != null ? 1 : 0;
 
-        VisionOutcome visionOutcome = applyVisionFiltering(clusters, visionEnabled);
-        Map<String, List<FlickrPhoto>> postVisionClusters = trimClusters(visionOutcome.filteredClusters);
+        if (areaLandmarkId == null) {
+            System.out.println("   ⚠️ Failed to upsert area landmark");
+            return new SeedResult(area.getName(), totalFetched, 0, 0, 0, 0, totalMissingGeo, totalMissingUrl, duplicateCount, 0, 0, 0);
+        }
 
-        Map<String, UUID> hotspotIds = upsertAreaHotspots(area, areaLandmarkId, postVisionClusters);
-        int hotspotUpserts = hotspotIds.size();
+        // Apply vision filtering to all photos
+        VisionOutcome visionOutcome = applyVisionFilteringToList(allFiltered, visionEnabled);
 
-        InsertStats insertStats = insertPhotosForHotspots(hotspotIds, postVisionClusters, visionOutcome.qaByPhotoKey);
+        InsertStats insertStats = insertPhotosForLandmark(areaLandmarkId, visionOutcome.filteredPhotos, visionOutcome.qaByPhotoKey);
 
         int uniqueCandidates = allFiltered.size();
         int newCandidates = insertStats.inserted;
 
         System.out.println("   📈 Area candidates — unique collected:" + uniqueCandidates +
             " new (not-in-DB):" + newCandidates);
+        System.out.println("   🧠 Vision rejections — portraits: " + visionOutcome.portraitRejected + ", blurry: " + visionOutcome.blurryRejected);
         if (newCandidates == 0) {
             System.out.println("   ℹ️  Area already populated; no new photos available under current search settings.");
         }
 
-        System.out.println("   ✅ Area upsert complete — hotspots:" + hotspotUpserts +
+        System.out.println("   ✅ Area upsert complete — " +
                 " attempted:" + insertStats.attempted +
                 " inserted:" + insertStats.inserted +
                 " conflict-skipped:" + insertStats.conflicts +
-                " failed:" + insertStats.failed +
-                (fallbackUsed ? " [fallback hotspot used]" : ""));
+                " failed:" + insertStats.failed);
 
         return new SeedResult(area.getName(), totalFetched, allFiltered.size(), insertStats.inserted, landmarkUpserts,
-                hotspotUpserts, totalMissingGeo, totalMissingUrl, duplicateCount, insertStats.conflicts, insertStats.failed, insertStats.attempted);
+                0, totalMissingGeo, totalMissingUrl, duplicateCount, insertStats.conflicts, insertStats.failed, insertStats.attempted);
     }
 
     private List<FlickrPhoto> searchPhotosGeo(String apiKey, TargetLocation location, String sortOrder) {
@@ -753,35 +757,17 @@ public class FlickrSeedService {
         UUID landmarkId = upsertLandmark(location, placeSlug, center[0], center[1], coverUrl, qualityPhotos.size());
         int landmarkUpserts = landmarkId != null ? 1 : 0;
 
-        Map<String, List<FlickrPhoto>> clusters = clusterPhotos(qualityPhotos);
-        boolean fallbackUsed = false;
-
-        if (clusters.isEmpty() && !qualityPhotos.isEmpty()) {
-            fallbackUsed = true;
-            String reason = qualityPhotos.size() >= MIN_LANDMARK_PHOTOS_FOR_FALLBACK
-                    ? "no clusters despite " + qualityPhotos.size() + " photos"
-                    : "too few photos for clustering";
-            System.out.println("      🛟 Fallback hotspot used (reason: " + reason + ")");
-            Map<String, List<FlickrPhoto>> fallback = new LinkedHashMap<>();
-            fallback.put("fallback", selectTopPhotosForHotspot(qualityPhotos));
-            clusters = fallback;
+        if (landmarkId == null) {
+            return new UpsertOutcome(0, 0, 0, 0, 0, 0, 0, 0, false);
         }
 
-        clusters = trimClusters(clusters);
+        // Apply vision filtering before inserting photos
+        VisionOutcome visionOutcome = applyVisionFilteringToList(qualityPhotos, visionEnabled);
 
-        int clusteredPhotoCount = clusters.values().stream().mapToInt(List::size).sum();
-        int skippedByCluster = Math.max(0, qualityPhotos.size() - clusteredPhotoCount);
+        InsertStats insertStats = insertPhotosForLandmark(landmarkId, visionOutcome.filteredPhotos, visionOutcome.qaByPhotoKey);
 
-        Map<String, UUID> hotspotIds = upsertHotspots(location, placeSlug, landmarkId, clusters);
-        int hotspotUpserts = hotspotIds.size();
-
-        VisionOutcome visionOutcome = applyVisionFiltering(clusters, visionEnabled);
-        Map<String, List<FlickrPhoto>> postVisionClusters = trimClusters(visionOutcome.filteredClusters);
-
-        InsertStats insertStats = insertPhotosForHotspots(hotspotIds, postVisionClusters, visionOutcome.qaByPhotoKey);
-
-        return new UpsertOutcome(insertStats.inserted, landmarkUpserts, hotspotUpserts, insertStats.attempted,
-            insertStats.conflicts, insertStats.failed, visionOutcome.portraitRejected, visionOutcome.blurryRejected, fallbackUsed);
+        return new UpsertOutcome(insertStats.inserted, landmarkUpserts, 0, insertStats.attempted,
+            insertStats.conflicts, insertStats.failed, visionOutcome.portraitRejected, visionOutcome.blurryRejected, false);
     }
 
     private UUID upsertLandmark(TargetLocation location, String placeSlug, double lat, double lng, String coverUrl, int photoCount) {
@@ -914,6 +900,50 @@ public class FlickrSeedService {
         return hotspotIds;
     }
 
+    private VisionOutcome applyVisionFilteringToList(List<FlickrPhoto> photos, boolean visionEnabled) {
+        if (!visionEnabled) {
+            return new VisionOutcome(photos, new HashMap<>(), 0, 0, true);
+        }
+
+        Path visionScript = resolveVisionScriptPath();
+        if (visionScript == null) {
+            System.out.println("      ⚠️  Vision filter unavailable, skipping portrait/blur checks (script missing)");
+            return new VisionOutcome(photos, new HashMap<>(), 0, 0, true);
+        }
+
+        Map<String, VisionResult> qaByPhotoKey = new HashMap<>();
+        int portraitRejected = 0;
+        int blurryRejected = 0;
+
+        // Sort by views to prioritize high-quality photos for vision analysis
+        List<FlickrPhoto> sorted = new ArrayList<>(photos);
+        sorted.sort(Comparator.comparingInt(FlickrPhoto::getViews).reversed());
+
+        // Analyze top candidates
+        List<FlickrPhoto> candidates = sorted.subList(0, Math.min(sorted.size(), CANDIDATES_PER_HOTSPOT));
+        Map<String, VisionResult> decisions = getVisionDecisions(candidates, qaByPhotoKey, visionScript);
+
+        List<FlickrPhoto> filtered = new ArrayList<>();
+        for (FlickrPhoto photo : photos) {
+            String key = "flickr:" + photo.getId();
+            VisionResult vr = decisions.get(key);
+            if (vr != null) {
+                qaByPhotoKey.put(key, vr);
+                if (vr.isPortrait()) {
+                    portraitRejected++;
+                    continue;
+                }
+                if (vr.isBlurry()) {
+                    blurryRejected++;
+                    continue;
+                }
+            }
+            filtered.add(photo);
+        }
+
+        return new VisionOutcome(filtered, qaByPhotoKey, portraitRejected, blurryRejected, true);
+    }
+
     private VisionOutcome applyVisionFiltering(Map<String, List<FlickrPhoto>> clusters, boolean visionEnabled) {
         if (!visionEnabled) {
             return new VisionOutcome(clusters, new HashMap<>(), 0, 0);
@@ -989,6 +1019,73 @@ public class FlickrSeedService {
         qaByPhotoKey.putAll(computed);
         visionCache.putAll(computed);
         return results;
+    }
+
+    private InsertStats insertPhotosForLandmark(UUID landmarkId, List<FlickrPhoto> photos, Map<String, VisionResult> qaByPhotoKey) {
+        String sql = "INSERT INTO photos (spot_id, original_key, variants, visibility) " +
+            "VALUES (?, ?, jsonb_build_object(" +
+            "  'small', ?, " +
+            "  'medium', ?, " +
+            "  'large', ?, " +
+            "  'original', ?, " +
+            "  'latitude', ?::double precision, " +
+            "  'longitude', ?::double precision, " +
+            "  'owner_name', ?, " +
+            "  'views', ?::integer, " +
+            "  'title', ?" +
+            ") || COALESCE(?::jsonb, '{}'::jsonb), 'public') " +
+            "ON CONFLICT (original_key) DO NOTHING";
+
+        List<Object[]> batchArgs = new ArrayList<>();
+        for (FlickrPhoto photo : photos) {
+            String smallUrl = StringUtils.hasText(photo.getUrlS()) ? photo.getUrlS() : constructUrl(photo, "s");
+            String mediumUrl = StringUtils.hasText(photo.getUrlM()) ? photo.getUrlM() :
+                    (StringUtils.hasText(photo.getUrlL()) ? photo.getUrlL() : smallUrl);
+            String largeUrl = StringUtils.hasText(photo.getUrlL()) ? photo.getUrlL() : mediumUrl;
+            String originalUrl = largeUrl;
+            String qaJson = renderQaJson(qaByPhotoKey.get("flickr:" + photo.getId()));
+
+            batchArgs.add(new Object[]{
+                    landmarkId,
+                    "flickr:" + photo.getId(),
+                    smallUrl,
+                    mediumUrl,
+                    largeUrl,
+                    originalUrl,
+                photo.getLatitude(),
+                photo.getLongitude(),
+                    photo.getOwnerName() != null ? photo.getOwnerName() : "Unknown",
+                    photo.getViews(),
+                photo.getTitle() != null ? photo.getTitle() : "",
+                    qaJson
+            });
+        }
+
+        int attempted = batchArgs.size();
+        if (batchArgs.isEmpty()) {
+            return new InsertStats(0, 0, 0, 0);
+        }
+
+        int inserted = 0;
+        int conflicts = 0;
+        int failed = 0;
+        for (int start = 0; start < batchArgs.size(); start += PHOTO_BATCH_SIZE) {
+            int end = Math.min(start + PHOTO_BATCH_SIZE, batchArgs.size());
+            try {
+                int[] results = jdbcTemplate.batchUpdate(sql, batchArgs.subList(start, end));
+                for (int r : results) {
+                    if (r > 0) {
+                        inserted += r;
+                    } else {
+                        conflicts++;
+                    }
+                }
+            } catch (DataAccessException dae) {
+                failed += (end - start);
+                System.out.println("      ⚠️  Insert batch failed: " + dae.getMessage());
+            }
+        }
+        return new InsertStats(attempted, inserted, conflicts, failed);
     }
 
     private InsertStats insertPhotosForHotspots(Map<String, UUID> hotspotIds, Map<String, List<FlickrPhoto>> clusters,

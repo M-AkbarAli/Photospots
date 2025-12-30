@@ -2,7 +2,7 @@ spring:
   application:
     name: photospots-backend
   datasource:
-    url: jdbc:postgresql://localhost:5432/photospots
+    url: jdbc:postgresql://localhost:5433/photospots
     username: photospots
     password: photospots
   jpa:

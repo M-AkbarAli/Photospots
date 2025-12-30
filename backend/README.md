@@ -21,6 +21,31 @@ Baseline Spring Boot skeleton to replace the legacy TypeScript/Supabase backend.
 2. Start Postgres with PostGIS and Redis locally.
 3. `mvn spring-boot:run` from this directory.
 
+## Database Seeding
+
+The backend supports dual Postgres volumes for safe testing:
+- **Fallback DB** (port 5432): Stable production data
+- **Fresh DB** (port 5433): Safe testing environment
+
+See **[DB_VOLUMES.md](./DB_VOLUMES.md)** for the complete workflow including:
+- Setting up dual databases
+- Switching between databases
+- Safety guards to prevent accidental data loss
+- Seeding commands and best practices
+
+Quick start for fresh database testing:
+```bash
+# Create fresh volume
+docker volume create backend-spring_pgdata_fresh
+
+# Start both databases
+docker compose up -d postgres postgres_fresh redis
+
+# Point to fresh DB and seed
+export SPRING_DATASOURCE_URL="jdbc:postgresql://localhost:5433/photospots"
+./mvnw spring-boot:run -Dspring-boot.run.arguments="--seed --seed-reset"
+```
+
 ## Next steps
 - Implement JWT issuance/validation and wire SecurityFilterChain with a JWT filter.
 - Add geometry helpers to build `Point` from lat/lng and port legacy nearby/search RPCs as PostGIS queries.

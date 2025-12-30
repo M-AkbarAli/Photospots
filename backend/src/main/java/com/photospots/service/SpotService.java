@@ -1,13 +1,5 @@
 package com.photospots.service;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.photospots.config.AppProperties;
-import com.photospots.dto.PhotoDto;
-import com.photospots.dto.SpotDto;
-import com.photospots.model.Spot;
-import com.photospots.repository.SpotRepository;
-import com.photospots.util.GeoValidator;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
@@ -18,23 +10,84 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+
+import javax.swing.tree.RowMapper;
+
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.Point;
+import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.postgresql.util.PGobject;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.photospots.config.AppProperties;
+import com.photospots.dto.PhotoDto;
+import com.photospots.dto.SpotDto;
+import com.photospots.model.Spot;
+import com.photospots.repository.SpotRepository;
+import com.photospots.util.GeoValidator;
 
 @Service
 public class SpotService {
 
+    private class SpotRowMapper implements RowMapper<SpotDto> {
+        @Override
+        public SpotDto mapRow(ResultSet rs, int rowNum) throws SQLException {
+            SpotDto dto = new SpotDto();
+            String id = rs.getString("id");
+            if (id != null) {
+                dto.setId(UUID.fromString(id));
+            }
+            dto.setName(rs.getString("name"));
+            dto.setDescription(rs.getString("description"));
+            dto.setLatitude(rs.getDouble("lat"));
+            dto.setLongitude(rs.getDouble("lng"));
+            dto.setScore(rs.getObject("score") != null ? rs.getDouble("score") : null);
+            Object distance = rs.getObject("distance_m");
+            if (distance != null) {
+                dto.setDistanceMeters(rs.getDouble("distance_m"));
+            }
+            dto.setPhotoUrl(rs.getString("photo_url"));
+            java.sql.Array categories = rs.getArray("categories");
+            if (categories != null) {
+                String[] arr = (String[]) categories.getArray();
+                dto.setCategories(Arrays.asList(arr));
+            }
+            return dto;
+        }
+    }
+    private class PhotoRowMapper implements RowMapper<PhotoDto> {
+        @Override
+        public PhotoDto mapRow(ResultSet rs, int rowNum) throws SQLException {
+            PhotoDto dto = new PhotoDto();
+            dto.setId(rs.getString("id"));
+            dto.setSpotId(rs.getString("spot_id"));
+            Object variants = rs.getObject("variants");
+            if (variants instanceof PGobject pg && pg.getValue() != null) {
+                try {
+                    Map<String, Object> map = objectMapper.readValue(pg.getValue(), new TypeReference<Map<String, Object>>() {
+                    });
+                    dto.setVariants(map);
+                } catch (Exception ignored) {
+                }
+            }
+            Object created = rs.getObject("created_at");
+            if (created instanceof OffsetDateTime odt) {
+                dto.setCreatedAt(odt);
+            }
+            return dto;
+        }
+    }
     private final SpotRepository spotRepository;
     private final JdbcTemplate jdbcTemplate;
     private final CacheService cacheService;
     private final AppProperties appProperties;
+
     private final ObjectMapper objectMapper;
+
     private final GeometryFactory geometryFactory = new GeometryFactory();
 
     public SpotService(
@@ -130,42 +183,11 @@ public class SpotService {
 
     @Transactional(readOnly = true)
     public List<SpotDto> hotspotsForLandmark(UUID landmarkId) {
+        // Deprecated: hotspots are no longer used. Return empty list.
         String cacheKey = "hotspots:" + landmarkId;
-        Optional<List> cached = cacheService.get(cacheKey, List.class);
-        if (cached.isPresent()) {
-            return cached.get();
-        }
-
-        String landmarkSql = "select id, name, lat, lng from spots where id = ?";
-        List<SpotDto> landmarks = jdbcTemplate.query(landmarkSql, (rs, rowNum) -> {
-            SpotDto dto = new SpotDto();
-            dto.setId(UUID.fromString(rs.getString("id")));
-            dto.setName(rs.getString("name"));
-            dto.setLatitude(rs.getDouble("lat"));
-            dto.setLongitude(rs.getDouble("lng"));
-            return dto;
-        }, landmarkId);
-
-        if (landmarks.isEmpty()) {
-            throw new IllegalArgumentException("Landmark not found");
-        }
-
-        SpotDto landmark = landmarks.getFirst();
-        String sql = "select * from api_spots_nearby(?, ?, ?, ?)";
-        List<SpotDto> nearby = jdbcTemplate.query(sql, new SpotRowMapper(), landmark.getLatitude(), landmark.getLongitude(), 500, 200);
-        List<SpotDto> hotspots = new ArrayList<>();
-        for (SpotDto s : nearby) {
-            if (s.getId() != null && s.getId().equals(landmarkId)) {
-                continue;
-            }
-            List<String> categories = s.getCategories();
-            if (categories != null && categories.stream().anyMatch(c -> c.equalsIgnoreCase("hotspot"))) {
-                hotspots.add(s);
-            }
-        }
-
-        cacheService.set(cacheKey, hotspots, Duration.ofSeconds(appProperties.getCache().getHotspotsSeconds()));
-        return hotspots;
+        List<SpotDto> emptyList = new ArrayList<>();
+        cacheService.set(cacheKey, emptyList, Duration.ofSeconds(appProperties.getCache().getHotspotsSeconds()));
+        return emptyList;
     }
 
     @Transactional(readOnly = true)
@@ -205,55 +227,5 @@ public class SpotService {
             dto.setLongitude(spot.getLng() != null ? spot.getLng() : 0);
         }
         return dto;
-    }
-
-    private class SpotRowMapper implements RowMapper<SpotDto> {
-        @Override
-        public SpotDto mapRow(ResultSet rs, int rowNum) throws SQLException {
-            SpotDto dto = new SpotDto();
-            String id = rs.getString("id");
-            if (id != null) {
-                dto.setId(UUID.fromString(id));
-            }
-            dto.setName(rs.getString("name"));
-            dto.setDescription(rs.getString("description"));
-            dto.setLatitude(rs.getDouble("lat"));
-            dto.setLongitude(rs.getDouble("lng"));
-            dto.setScore(rs.getObject("score") != null ? rs.getDouble("score") : null);
-            Object distance = rs.getObject("distance_m");
-            if (distance != null) {
-                dto.setDistanceMeters(rs.getDouble("distance_m"));
-            }
-            dto.setPhotoUrl(rs.getString("photo_url"));
-            java.sql.Array categories = rs.getArray("categories");
-            if (categories != null) {
-                String[] arr = (String[]) categories.getArray();
-                dto.setCategories(Arrays.asList(arr));
-            }
-            return dto;
-        }
-    }
-
-    private class PhotoRowMapper implements RowMapper<PhotoDto> {
-        @Override
-        public PhotoDto mapRow(ResultSet rs, int rowNum) throws SQLException {
-            PhotoDto dto = new PhotoDto();
-            dto.setId(rs.getString("id"));
-            dto.setSpotId(rs.getString("spot_id"));
-            Object variants = rs.getObject("variants");
-            if (variants instanceof PGobject pg && pg.getValue() != null) {
-                try {
-                    Map<String, Object> map = objectMapper.readValue(pg.getValue(), new TypeReference<Map<String, Object>>() {
-                    });
-                    dto.setVariants(map);
-                } catch (Exception ignored) {
-                }
-            }
-            Object created = rs.getObject("created_at");
-            if (created instanceof OffsetDateTime odt) {
-                dto.setCreatedAt(odt);
-            }
-            return dto;
-        }
     }
 }

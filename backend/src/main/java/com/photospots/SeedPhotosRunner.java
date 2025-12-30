@@ -4,6 +4,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.io.ClassPathResource;
@@ -34,6 +35,9 @@ public class SeedPhotosRunner implements ApplicationRunner {
     private final FlickrSeedService flickrSeedService;
     private final JdbcTemplate jdbcTemplate;
 
+    @Value("${spring.datasource.url}")
+    private String datasourceUrl;
+
     public SeedPhotosRunner(FlickrSeedService flickrSeedService, JdbcTemplate jdbcTemplate) {
         this.flickrSeedService = flickrSeedService;
         this.jdbcTemplate = jdbcTemplate;
@@ -50,7 +54,40 @@ public class SeedPhotosRunner implements ApplicationRunner {
 
         boolean resetMode = args.containsOption("seed-reset");
         if (resetMode) {
-            System.out.println("⚠️  Reset mode enabled: truncating spots and photos...");
+            // Safety guard: prevent accidental reset of fallback (production) database
+            boolean overrideFlag = args.containsOption("i-know-what-im-doing");
+            boolean isFreshDb = datasourceUrl != null && datasourceUrl.contains(":5433/");
+            boolean isFallbackDb = datasourceUrl != null && datasourceUrl.contains(":5432/");
+
+            System.out.println("⚠️  Reset mode enabled!");
+            System.out.println("   📊 Current datasource: " + (datasourceUrl != null ? datasourceUrl.replaceAll("password=[^&;]*", "password=***") : "unknown"));
+            
+            if (isFallbackDb && !overrideFlag) {
+                System.out.println();
+                System.out.println("╔══════════════════════════════════════════════════════════════════╗");
+                System.out.println("║                    🚨 SAFETY GUARD TRIGGERED                      ║");
+                System.out.println("╚══════════════════════════════════════════════════════════════════╝");
+                System.out.println();
+                System.out.println("   ❌ REFUSING to reset the FALLBACK database (port 5432)");
+                System.out.println("   This appears to be your production/stable database with existing seed data.");
+                System.out.println();
+                System.out.println("   To reset anyway (⚠️  DANGER ZONE), add the flag:");
+                System.out.println("      --i-know-what-im-doing");
+                System.out.println();
+                System.out.println("   To safely test re-seeding:");
+                System.out.println("      1. Point to the fresh DB: SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5433/photospots");
+                System.out.println("      2. Then run with --seed-reset");
+                System.out.println();
+                System.exit(1);
+            }
+            
+            if (overrideFlag) {
+                System.out.println("   ⚠️  Override flag detected - proceeding with reset!");
+            } else if (isFreshDb) {
+                System.out.println("   ✅ Fresh database detected (port 5433) - safe to reset");
+            }
+            
+            System.out.println("   🗑️  Truncating spots and photos...");
             resetSeedData();
         }
 
