@@ -1,9 +1,15 @@
 import Mapbox from '@rnmapbox/maps';
 import React, { useCallback, useMemo } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useTheme } from '../../constants/theme';
+import { Image, Pressable, StyleSheet, View } from 'react-native';
 import { normalizeImageUrl } from '../../lib/api';
 import type { Spot } from '../../types/api';
+
+// Marker size and styling (matching reference image #3)
+const MARKER_SIZE = 48;
+const MARKER_BORDER_RADIUS = 10;
+const MARKER_BORDER_WIDTH = 2;
+const MARKER_BORDER_COLOR = '#FFFFFF';
+const PLACEHOLDER_BG = 'rgba(60, 60, 67, 0.9)';
 
 interface MapMarkersProps {
   landmarks: Spot[];
@@ -13,64 +19,32 @@ interface MapMarkersProps {
   maxMarkers?: number;
 }
 
-interface MarkerCalloutProps {
+interface MarkerImageProps {
   spot: Spot;
   isSelected: boolean;
   onPress: () => void;
 }
 
-function formatDistance(meters?: number): string {
-  if (!meters) return '';
-  if (meters < 1000) {
-    return `${Math.round(meters)} m`;
-  }
-  return `${(meters / 1000).toFixed(1)} km`;
-}
-
-function MarkerCallout({ spot, isSelected, onPress }: MarkerCalloutProps) {
-  const theme = useTheme();
+function MarkerImage({ spot, isSelected, onPress }: MarkerImageProps) {
   const photoUrl = normalizeImageUrl(spot.photoUrl);
 
-  const containerStyle = useMemo(
-    () => [
-      styles.calloutContainer,
-      {
-        backgroundColor: theme.MARKER_BG,
-        borderColor: isSelected ? theme.ACCENT : theme.MARKER_BORDER,
-        borderWidth: isSelected ? 2 : 1,
-        transform: [{ scale: isSelected ? 1.05 : 1 }],
-      },
-    ],
-    [theme, isSelected]
-  );
-
   return (
-    <Pressable onPress={onPress} style={containerStyle}>
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.markerContainer,
+        isSelected && styles.markerSelected,
+      ]}
+    >
       {photoUrl ? (
         <Image
           source={{ uri: photoUrl }}
-          style={styles.thumbnail}
-          onError={() => {}}
+          style={styles.markerImage}
+          resizeMode="cover"
         />
       ) : (
-        <View style={[styles.thumbnail, styles.placeholderThumbnail]}>
-          <Text style={[styles.placeholderIcon, { color: theme.TEXT_MUTED }]}>📍</Text>
-        </View>
+        <View style={styles.markerPlaceholder} />
       )}
-      <View style={styles.textContainer}>
-        <Text
-          style={[styles.title, { color: theme.TEXT }]}
-          numberOfLines={1}
-          ellipsizeMode="tail"
-        >
-          {spot.name}
-        </Text>
-        {spot.distanceMeters !== undefined && (
-          <Text style={[styles.distance, { color: theme.TEXT_MUTED }]}>
-            {formatDistance(spot.distanceMeters)}
-          </Text>
-        )}
-      </View>
     </Pressable>
   );
 }
@@ -108,11 +82,11 @@ export function MapMarkers({
           key={spot.id}
           id={`marker-${spot.id}`}
           coordinate={[spot.longitude, spot.latitude]}
-          anchor={{ x: 0.5, y: 1 }}
+          anchor={{ x: 0.5, y: 0.5 }}
           allowOverlap
           allowOverlapWithPuck
         >
-          <MarkerCallout
+          <MarkerImage
             spot={spot}
             isSelected={spot.id === selectedSpotId}
             onPress={() => handleMarkerPress(spot)}
@@ -124,45 +98,31 @@ export function MapMarkers({
 }
 
 const styles = StyleSheet.create({
-  calloutContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    paddingRight: 12,
-    borderRadius: 12,
-    maxWidth: 200,
+  markerContainer: {
+    width: MARKER_SIZE,
+    height: MARKER_SIZE,
+    borderRadius: MARKER_BORDER_RADIUS,
+    borderWidth: MARKER_BORDER_WIDTH,
+    borderColor: MARKER_BORDER_COLOR,
+    overflow: 'hidden',
+    backgroundColor: PLACEHOLDER_BG,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
     elevation: 8,
   },
-  thumbnail: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
-    backgroundColor: 'rgba(128, 128, 128, 0.2)',
+  markerSelected: {
+    borderWidth: 3,
+    transform: [{ scale: 1.1 }],
   },
-  placeholderThumbnail: {
-    justifyContent: 'center',
-    alignItems: 'center',
+  markerImage: {
+    width: '100%',
+    height: '100%',
   },
-  placeholderIcon: {
-    fontSize: 18,
-  },
-  textContainer: {
-    flex: 1,
-    marginLeft: 8,
-    justifyContent: 'center',
-  },
-  title: {
-    fontSize: 13,
-    fontWeight: '600',
-    lineHeight: 16,
-  },
-  distance: {
-    fontSize: 11,
-    marginTop: 1,
+  markerPlaceholder: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: PLACEHOLDER_BG,
   },
 });

@@ -9,7 +9,7 @@ import { MainBottomSheet, type MainBottomSheetRef } from '../../components/MainB
 import { MapMarkers } from '../../components/Map/MapMarkers';
 import { SearchPill } from '../../components/Map/SearchPill';
 import { SearchThisAreaPill } from '../../components/Map/SearchThisAreaPill';
-import { useMapStyle, useTheme } from '../../constants/theme';
+import { useTheme } from '../../constants/theme';
 import { filterLandmarks, getNearbySpots } from '../../lib/api';
 import { distanceFromCoordinates } from '../../lib/geo';
 import {
@@ -20,10 +20,15 @@ import {
 } from '../../lib/storage';
 import type { Spot } from '../../types/api';
 
-// Set Mapbox access token
-Mapbox.setAccessToken(
-  process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN || 'pk.demo_token'
-);
+// Set Mapbox access token (must be set via EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN in .env)
+const mapboxToken = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN;
+if (!mapboxToken) {
+  console.warn(
+    '[Mapbox] EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN is not set. ' +
+    'Add it to frontend/.env for the map to work correctly.'
+  );
+}
+Mapbox.setAccessToken(mapboxToken || '');
 
 // NOTE: The "[MapboxCommon] Invalid size" warning during app launch is a known
 // harmless issue in @rnmapbox/maps. It occurs at the native iOS level before
@@ -37,10 +42,12 @@ const SEARCH_RADIUS_METERS = 2500; // 2.5km radius for landmark-first experience
 const DISTANCE_THRESHOLD_METERS = 400;
 const ZOOM_THRESHOLD = 1.0;
 
+// Always use dark map style
+const DARK_MAP_STYLE = 'mapbox://styles/makbarali/cmjru8opm000d01s2f9y80ii7';
+
 export default function MapScreen() {
   const router = useRouter();
   const theme = useTheme();
-  const mapStyle = useMapStyle();
   const params = useLocalSearchParams<{
     selectedSpotId?: string;
     centerLng?: string;
@@ -301,7 +308,7 @@ export default function MapScreen() {
     <GestureHandlerRootView style={[styles.container, { backgroundColor: theme.BG }]}>
       <Mapbox.MapView
         style={styles.map}
-        styleURL={mapStyle}
+        styleURL={DARK_MAP_STYLE}
         onCameraChanged={handleCameraChanged}
         onMapIdle={handleMapIdle}
         logoEnabled={false}
@@ -315,7 +322,7 @@ export default function MapScreen() {
           }}
         />
 
-        {/* Landmark markers (callout cards with thumbnails) */}
+        {/* Landmark markers (image-only squares with white border) */}
         <MapMarkers
           landmarks={landmarks}
           selectedSpotId={selectedSpotId}
@@ -333,10 +340,12 @@ export default function MapScreen() {
         </View>
       )}
 
-      {/* Top search pill */}
-      <View style={styles.topPillContainer}>
-        <SearchPill onPress={handleSearchPress} />
-      </View>
+      {/* Top search pill - hidden when landmark selected */}
+      {!selectedSpotId && (
+        <View style={styles.topPillContainer}>
+          <SearchPill onPress={handleSearchPress} onRefresh={handleSearchThisArea} />
+        </View>
+      )}
 
       {/* Search this area pill */}
       {showSearchPill && !selectedSpotId && (

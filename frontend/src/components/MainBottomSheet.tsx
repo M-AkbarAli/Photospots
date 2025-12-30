@@ -277,15 +277,27 @@ export const MainBottomSheet = forwardRef<MainBottomSheetRef, MainBottomSheetPro
     // Render browse mode content
     const renderBrowseContent = () => (
       <>
-        {/* Search input */}
+        {/* Search input - iOS dark translucent style matching top search bar */}
         <Pressable
-          style={[styles.searchInputContainer, { backgroundColor: theme.BORDER }]}
+          style={styles.browseSearchBar}
           onPress={handleSearchFocus}
         >
-          <Ionicons name="search" size={18} color={theme.TEXT_MUTED} />
-          <Text style={[styles.searchPlaceholder, { color: theme.TEXT_MUTED }]}>
+          <Ionicons name="search" size={18} color="rgba(235, 235, 245, 0.60)" />
+          <Text style={styles.browseSearchPlaceholder}>
             Search landmarks...
           </Text>
+          <Pressable
+            style={styles.browseRefreshButton}
+            onPress={(e) => {
+              e.stopPropagation();
+              onRetry();
+            }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <View style={styles.browseRefreshIconContainer}>
+              <Ionicons name="refresh" size={14} color="#0A84FF" />
+            </View>
+          </Pressable>
         </Pressable>
 
         <Text style={[styles.sectionTitle, { color: theme.TEXT }]}>Nearby landmarks</Text>
@@ -640,6 +652,40 @@ const styles = StyleSheet.create({
   searchPlaceholder: {
     flex: 1,
     fontSize: 15,
+  },
+  // iOS dark translucent search bar (matching top SearchPill)
+  browseSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 44,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+    backgroundColor: 'rgba(44, 44, 46, 0.88)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.10)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 8,
+    gap: 10,
+  },
+  browseSearchPlaceholder: {
+    flex: 1,
+    fontSize: 15,
+    color: 'rgba(235, 235, 245, 0.60)',
+  },
+  browseRefreshButton: {
+    padding: 2,
+  },
+  browseRefreshIconContainer: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(10, 132, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   searchHeader: {
     flexDirection: 'row',
