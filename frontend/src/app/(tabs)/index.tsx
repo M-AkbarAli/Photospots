@@ -43,7 +43,7 @@ const DISTANCE_THRESHOLD_METERS = 400;
 const ZOOM_THRESHOLD = 1.0;
 
 // Always use dark map style
-const DARK_MAP_STYLE = 'mapbox://styles/makbarali/cmjru8opm000d01s2f9y80ii7';
+const DARK_STYLE_URL = 'mapbox://styles/makbarali/cmjru8opm000d01s2f9y80ii7';
 
 export default function MapScreen() {
   const router = useRouter();
@@ -53,6 +53,11 @@ export default function MapScreen() {
     centerLng?: string;
     centerLat?: string;
   }>();
+
+  useEffect(() => {
+    console.log('[Map] styleURL', DARK_STYLE_URL);
+    console.log('[Map] token set', !!mapboxToken);
+  }, []);
 
   // Refs
   const cameraRef = useRef<Mapbox.Camera>(null);
@@ -308,9 +313,10 @@ export default function MapScreen() {
     <GestureHandlerRootView style={[styles.container, { backgroundColor: theme.BG }]}>
       <Mapbox.MapView
         style={styles.map}
-        styleURL={DARK_MAP_STYLE}
+        styleURL={DARK_STYLE_URL}
         onCameraChanged={handleCameraChanged}
         onMapIdle={handleMapIdle}
+        onDidFinishLoadingStyle={() => console.log('[Map] style loaded')}
         logoEnabled={false}
         attributionEnabled={false}
       >
