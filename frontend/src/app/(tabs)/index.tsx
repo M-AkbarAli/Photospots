@@ -82,8 +82,19 @@ export default function MapScreen() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // Filter spots to landmarks only for display
-  const landmarks = useMemo(() => filterLandmarks(spots), [spots]);
+  // Filter spots to landmarks only and sort by proximity to the user's location (fallback to last fetch center)
+  const landmarks = useMemo(() => {
+    const base = filterLandmarks(spots);
+    const origin = userCoordinates || lastFetchedCenter || TORONTO_COORDS;
+
+    if (!origin) return base;
+
+    return [...base].sort((a, b) => {
+      const distA = distanceFromCoordinates([a.longitude, a.latitude], origin);
+      const distB = distanceFromCoordinates([b.longitude, b.latitude], origin);
+      return distA - distB;
+    });
+  }, [spots, userCoordinates, lastFetchedCenter]);
 
   // Fetch nearby spots (landmarks only)
   const performFetch = useCallback(
