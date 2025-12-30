@@ -2,14 +2,14 @@ import { Ionicons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import type { BottomSheetMethods } from '@gorhom/bottom-sheet/lib/typescript/types';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Dimensions,
   Image,
   Linking,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -26,6 +26,44 @@ import {
 import { getCachedPhotos, setCachedPhotos } from '../../lib/photoCache';
 import type { Photo, Spot } from '../../types/api';
 import { CategoryChips } from './CategoryChips';
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const GRID_GAP = 8;
+const GRID_PADDING = 32; // 16px padding on each side
+const TILE_SIZE = (SCREEN_WIDTH - GRID_PADDING - GRID_GAP) / 2;
+
+// Flickr size suffixes in descending quality order
+const FLICKR_SIZE_SUFFIXES = ['b', 'c', 'z', 'm', 'n', 'w', 'q', 's'];
+
+function generateFlickrFallbackUrls(originalUrl: string): string[] {
+  const urls: string[] = [originalUrl];
+  const flickrPattern = /^(.*_[a-z0-9]+)_([bczmqnws])\.(jpg|jpeg|png|gif)$/i;
+  const match = originalUrl.match(flickrPattern);
+  
+  if (match) {
+    const [, baseUrl, currentSize, extension] = match;
+    const currentIndex = FLICKR_SIZE_SUFFIXES.indexOf(currentSize.toLowerCase());
+    for (let i = currentIndex + 1; i < FLICKR_SIZE_SUFFIXES.length; i++) {
+      urls.push(`${baseUrl}_${FLICKR_SIZE_SUFFIXES[i]}.${extension}`);
+    }
+  }
+  return urls;
+}
+
+/**
+ * Sort photos by "best" heuristic.
+ * TODO: Replace with real "best photo" ranking from backend.
+ */
+function sortPhotosByBest(photos: Photo[]): Photo[] {
+  return [...photos].sort((a, b) => {
+    const resA = (a.variants?.width || 0) * (a.variants?.height || 0);
+    const resB = (b.variants?.width || 0) * (b.variants?.height || 0);
+    if (resB !== resA) return resB - resA;
+    const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return dateB - dateA;
+  });
+}
 
 interface SpotBottomSheetProps {
   spotId: string | null;
@@ -133,6 +171,13 @@ export function SpotBottomSheet({
     }
   }, [spotId, photosLoading]);
 
+  // Auto-load photos when at full snap index
+  useEffect(() => {
+    if (currentSnapIndex === 2 && spotId && photosLoading === 'idle' && photos.length === 0) {
+      handleLoadPhotos();
+    }
+  }, [currentSnapIndex, spotId, photosLoading, photos.length, handleLoadPhotos]);
+
   const handleNavigate = useCallback(() => {
     if (!spot) return;
 
@@ -158,6 +203,28 @@ export function SpotBottomSheet({
       Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${coordString}`);
     });
   }, [spot]);
+
+  // Navigate to a specific photo's coordinates
+  const handleNavigateToPhoto = useCallback((photo: Photo) => {
+    const { latitude, longitude } = photo.variants;
+    const coordString = `${latitude},${longitude}`;
+    const label = encodeURIComponent('Photo location');
+
+    const url =
+      Platform.OS === 'ios'
+        ? `http://maps.apple.com/?daddr=${coordString}&ll=${coordString}&q=${label}`
+        : `google.navigation:q=${coordString}`;
+
+    Linking.openURL(url).catch(() => {
+      if (Platform.OS === 'android') {
+        Linking.openURL(`geo:${coordString}?q=${coordString}(${label})`).catch(() => {
+          Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${coordString}`);
+        });
+        return;
+      }
+      Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${coordString}`);
+    });
+  }, []);
 
   const handleViewPhotos = useCallback(() => {
     if (!spotId) return;
@@ -330,14 +397,7 @@ export function SpotBottomSheet({
             {currentSnapIndex === 2 && (
               <View style={styles.photosSection}>
                 <Text style={styles.sectionTitle}>Photos</Text>
-                {photosLoading === 'idle' && photos.length === 0 ? (
-                  <Pressable
-                    style={styles.loadPhotosButton}
-                    onPress={handleLoadPhotos}
-                  >
-                    <Text style={styles.loadPhotosText}>Load photos</Text>
-                  </Pressable>
-                ) : photosLoading === 'loading' ? (
+                {photosLoading === 'loading' ? (
                   <ActivityIndicator
                     size="small"
                     color={THEME.ACCENT}
@@ -369,30 +429,23 @@ export function SpotBottomSheet({
                         </Pressable>
                       </View>
                     )}
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      contentContainerStyle={styles.photoThumbnails}
-                    >
-                      {photos.slice(0, 10).map((photo) => {
-                        const imageUrl = getPreferredPhotoUrl(photo.variants);
-                        if (!imageUrl) return null;
-                        return (
-                          <Image
-                            key={photo.id}
-                            source={{ uri: imageUrl }}
-                            style={styles.photoThumbnail}
-                            onError={(e) => console.warn('[SpotBottomSheet] Photo thumbnail failed:', photo.id, e.nativeEvent.error)}
-                          />
-                        );
-                      })}
-                    </ScrollView>
+                    {/* 2-column vertical grid */}
+                    <View style={styles.photoGrid}>
+                      {sortPhotosByBest(photos).map((photo) => (
+                        <SpotPhotoTile
+                          key={photo.id}
+                          photo={photo}
+                          onNavigate={() => handleNavigateToPhoto(photo)}
+                          onOpenGallery={handleViewPhotos}
+                        />
+                      ))}
+                    </View>
                     <Pressable
                       style={styles.seeAllButton}
                       onPress={handleViewPhotos}
                     >
                       <Text style={styles.seeAllText}>
-                        See all photos {photos.length > 10 ? `(${photos.length})` : ''}
+                        Open full gallery {photos.length > 0 ? `(${photos.length} photos)` : ''}
                       </Text>
                     </Pressable>
                   </>
@@ -403,6 +456,71 @@ export function SpotBottomSheet({
         ) : null}
       </BottomSheetScrollView>
     </BottomSheet>
+  );
+}
+
+// Photo tile component with URL fallback
+function SpotPhotoTile({
+  photo,
+  onNavigate,
+  onOpenGallery,
+}: {
+  photo: Photo;
+  onNavigate: () => void;
+  onOpenGallery: () => void;
+}) {
+  const primaryUrl = getPreferredPhotoUrl(photo.variants);
+  const candidateUrls = primaryUrl ? generateFlickrFallbackUrls(primaryUrl) : [];
+  
+  const [urlIndex, setUrlIndex] = useState(0);
+  const [failed, setFailed] = useState(false);
+  const [showActions, setShowActions] = useState(false);
+  const hasLoggedError = useRef(false);
+
+  const handleImageError = useCallback(() => {
+    if (urlIndex < candidateUrls.length - 1) {
+      setUrlIndex((prev) => prev + 1);
+    } else {
+      setFailed(true);
+      if (!hasLoggedError.current) {
+        console.warn(`[SpotPhotoTile] All URLs failed for photo: ${photo.id}`);
+        hasLoggedError.current = true;
+      }
+    }
+  }, [urlIndex, candidateUrls.length, photo.id]);
+
+  if (candidateUrls.length === 0 || failed) {
+    return (
+      <View style={[styles.photoTile, styles.photoTilePlaceholder]}>
+        <Ionicons name="image-outline" size={24} color={THEME.TEXT_MUTED} />
+      </View>
+    );
+  }
+
+  return (
+    <Pressable
+      style={styles.photoTile}
+      onPress={() => setShowActions(!showActions)}
+    >
+      <Image
+        source={{ uri: candidateUrls[urlIndex] }}
+        style={styles.photoTileImage}
+        resizeMode="cover"
+        onError={handleImageError}
+      />
+      {showActions && (
+        <View style={styles.photoTileOverlay}>
+          <Pressable style={styles.photoTileAction} onPress={onNavigate}>
+            <Ionicons name="navigate" size={16} color="#FFF" />
+            <Text style={styles.photoTileActionText}>Navigate here</Text>
+          </Pressable>
+          <Pressable style={[styles.photoTileAction, styles.photoTileActionSecondary]} onPress={onOpenGallery}>
+            <Ionicons name="expand" size={16} color={THEME.TEXT} />
+            <Text style={[styles.photoTileActionText, { color: THEME.TEXT }]}>Full gallery</Text>
+          </Pressable>
+        </View>
+      )}
+    </Pressable>
   );
 }
 
@@ -579,14 +697,56 @@ const styles = StyleSheet.create({
     color: THEME.ACCENT,
     fontWeight: '600',
   },
-  photoThumbnails: {
-    gap: 8,
+  photoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: GRID_GAP,
   },
-  photoThumbnail: {
-    width: 100,
-    height: 100,
-    borderRadius: 8,
+  photoTile: {
+    width: TILE_SIZE,
+    height: TILE_SIZE,
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  photoTileImage: {
+    width: '100%',
+    height: '100%',
+  },
+  photoTilePlaceholder: {
     backgroundColor: THEME.BORDER,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  photoTileOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+  },
+  photoTileAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    gap: 6,
+    width: '100%',
+    backgroundColor: THEME.ACCENT,
+  },
+  photoTileActionSecondary: {
+    backgroundColor: THEME.CARD,
+  },
+  photoTileActionText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '600',
   },
   seeAllButton: {
     marginTop: 12,

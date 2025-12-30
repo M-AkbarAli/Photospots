@@ -16,23 +16,21 @@ import React, {
 } from 'react';
 import {
     ActivityIndicator,
+    Dimensions,
     Image,
     Keyboard,
     Linking,
     Platform,
     Pressable,
-    ScrollView,
     StyleSheet,
     Text,
     View,
 } from 'react-native';
 import { useTheme } from '../constants/theme';
 import {
-    aggregateHotspotPhotos,
     filterLandmarks,
     getPreferredPhotoUrl,
     getSpotById,
-    getSpotHotspots,
     getSpotPhotos,
     normalizeImageUrl,
     searchSpots,
@@ -42,6 +40,30 @@ import type { Photo, Spot } from '../types/api';
 
 type SheetMode = 'browse' | 'details' | 'search';
 type LoadingState = 'idle' | 'loading' | 'error';
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const PHOTO_GRID_GAP = 8;
+const PHOTO_GRID_PADDING = 16;
+const PHOTO_TILE_SIZE = (SCREEN_WIDTH - PHOTO_GRID_PADDING * 2 - PHOTO_GRID_GAP) / 2;
+
+/**
+ * Sort photos by "best" heuristic.
+ * TODO: Replace with real "best photo" ranking from backend.
+ * Current heuristic: higher resolution first, then newer createdAt.
+ */
+function sortPhotosByBest(photos: Photo[]): Photo[] {
+  return [...photos].sort((a, b) => {
+    // Prefer higher resolution
+    const resA = (a.variants?.width || 0) * (a.variants?.height || 0);
+    const resB = (b.variants?.width || 0) * (b.variants?.height || 0);
+    if (resB !== resA) return resB - resA;
+    
+    // Then prefer newer photos
+    const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return dateB - dateA;
+  });
+}
 
 interface MainBottomSheetProps {
   landmarks: Spot[];
@@ -148,7 +170,7 @@ export const MainBottomSheet = forwardRef<MainBottomSheetRef, MainBottomSheetPro
       loadSpot();
     }, [selectedSpotId, mode, initialSpot]);
 
-    // Load photos for details
+    // Load photos for details - landmark photos only (no hotspots)
     const handleLoadPhotos = useCallback(async () => {
       if (!selectedSpotId || photosLoading === 'loading') return;
 
@@ -163,40 +185,28 @@ export const MainBottomSheet = forwardRef<MainBottomSheetRef, MainBottomSheetPro
       setPhotoErrors(0);
 
       try {
-        const hotspots = await getSpotHotspots(selectedSpotId);
-        if (hotspots.length > 0) {
-          const { photos: aggregatedPhotos, errors } = await aggregateHotspotPhotos(
-            hotspots,
-            { maxHotspots: 20, maxPhotos: 60, concurrency: 4 }
-          );
-          setPhotos(aggregatedPhotos);
-          setPhotoErrors(errors);
-          setCachedPhotos(selectedSpotId, aggregatedPhotos, errors);
-        } else {
-          const directPhotos = await getSpotPhotos(selectedSpotId);
-          setPhotos(directPhotos);
-          setCachedPhotos(selectedSpotId, directPhotos, 0);
-        }
+        const landmarkPhotos = await getSpotPhotos(selectedSpotId);
+        setPhotos(landmarkPhotos);
+        setCachedPhotos(selectedSpotId, landmarkPhotos, 0);
         setPhotosLoading('idle');
       } catch (err) {
         console.error('Failed to load photos:', err);
-        try {
-          const directPhotos = await getSpotPhotos(selectedSpotId);
-          setPhotos(directPhotos);
-          setCachedPhotos(selectedSpotId, directPhotos, 0);
-          setPhotosLoading('idle');
-        } catch {
-          setPhotosLoading('error');
-        }
+        setPhotosLoading('error');
       }
     }, [selectedSpotId, photosLoading]);
 
-    // Navigate to landmark
-    const handleNavigate = useCallback(() => {
-      if (!spot) return;
-      const { latitude, longitude, name } = spot;
-      const label = encodeURIComponent(name);
+    // Auto-load photos when entering details mode
+    useEffect(() => {
+      if (mode === 'details' && selectedSpotId && photosLoading === 'idle' && photos.length === 0) {
+        handleLoadPhotos();
+      }
+    }, [mode, selectedSpotId, photosLoading, photos.length, handleLoadPhotos]);
+
+    // Navigate to a specific photo's coordinates
+    const handleNavigateToPhoto = useCallback((photo: Photo) => {
+      const { latitude, longitude } = photo.variants;
       const coordString = `${latitude},${longitude}`;
+      const label = encodeURIComponent('Photo location');
 
       const url =
         Platform.OS === 'ios'
@@ -204,9 +214,15 @@ export const MainBottomSheet = forwardRef<MainBottomSheetRef, MainBottomSheetPro
           : `google.navigation:q=${coordString}`;
 
       Linking.openURL(url).catch(() => {
+        if (Platform.OS === 'android') {
+          Linking.openURL(`geo:${coordString}?q=${coordString}(${label})`).catch(() => {
+            Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${coordString}`);
+          });
+          return;
+        }
         Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${coordString}`);
       });
-    }, [spot]);
+    }, []);
 
     // View all photos
     const handleViewPhotos = useCallback(() => {
@@ -417,154 +433,74 @@ export const MainBottomSheet = forwardRef<MainBottomSheetRef, MainBottomSheetPro
       </>
     );
 
-    // Render details mode content
+    // Render details mode content - pure photo gallery
     const renderDetailsContent = () => (
       <BottomSheetScrollView contentContainerStyle={styles.detailsContent}>
-        {/* Header with back button */}
+        {/* Header with back button and title */}
         <View style={styles.detailsHeader}>
           <Pressable onPress={handleBack} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color={theme.TEXT} />
           </Pressable>
           <Text style={[styles.detailsTitle, { color: theme.TEXT }]} numberOfLines={1}>
-            {spot?.name || 'Loading...'}
+            {spot?.name || 'Photos'}
           </Text>
         </View>
 
-        {spotLoading === 'loading' ? (
-          <View style={styles.loadingContainer}>
-            <View style={[styles.skeletonHero, { backgroundColor: theme.BORDER }]} />
-            <View style={[styles.skeletonLine, { backgroundColor: theme.BORDER, width: '60%', marginTop: 16 }]} />
-            <View style={[styles.skeletonLine, { backgroundColor: theme.BORDER, width: '40%', marginTop: 8 }]} />
+        {/* Photo grid - the main content */}
+        {photosLoading === 'loading' ? (
+          // Skeleton tiles while loading
+          <View style={styles.photoGrid}>
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <View
+                key={i}
+                style={[styles.photoTileContainer, styles.photoTilePlaceholder, { backgroundColor: theme.BORDER }]}
+              >
+                <ActivityIndicator size="small" color={theme.TEXT_MUTED} />
+              </View>
+            ))}
           </View>
-        ) : spotLoading === 'error' ? (
+        ) : photosLoading === 'error' ? (
           <View style={styles.emptyContainer}>
             <Ionicons name="alert-circle" size={40} color={theme.TEXT_MUTED} />
             <Text style={[styles.emptyText, { color: theme.TEXT_MUTED }]}>
-              Failed to load details
+              Failed to load photos
             </Text>
             <Pressable
               style={[styles.retryButton, { backgroundColor: theme.ACCENT }]}
-              onPress={() => {
-                if (selectedSpotId) {
-                  setSpotLoading('loading');
-                  getSpotById(selectedSpotId)
-                    .then((data: Spot) => {
-                      setSpot(data);
-                      setSpotLoading('idle');
-                    })
-                    .catch(() => setSpotLoading('error'));
-                }
-              }}
+              onPress={handleLoadPhotos}
             >
               <Text style={styles.retryButtonText}>Retry</Text>
             </Pressable>
           </View>
-        ) : spot ? (
+        ) : photos.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Ionicons name="images-outline" size={48} color={theme.TEXT_MUTED} />
+            <Text style={[styles.emptyText, { color: theme.TEXT_MUTED }]}>
+              No photos available for this landmark
+            </Text>
+          </View>
+        ) : (
           <>
-            {/* Hero image */}
-            {normalizeImageUrl(spot.photoUrl) ? (
-              <Image
-                source={{ uri: normalizeImageUrl(spot.photoUrl)! }}
-                style={styles.heroImage}
-                resizeMode="cover"
-              />
-            ) : (
-              <View style={[styles.heroImage, styles.heroPlaceholder, { backgroundColor: theme.BORDER }]}>
-                <Ionicons name="image-outline" size={48} color={theme.TEXT_MUTED} />
-              </View>
-            )}
-
-            {/* Info section */}
-            <View style={styles.infoSection}>
-              {spot.distanceMeters !== undefined && (
-                <Text style={[styles.distance, { color: theme.TEXT_MUTED }]}>
-                  {formatDistance(spot.distanceMeters)} away
-                </Text>
-              )}
-              {spot.description && (
-                <Text
-                  style={[styles.description, { color: theme.TEXT }]}
-                  numberOfLines={currentSnapIndex < 2 ? 3 : undefined}
-                >
-                  {spot.description}
-                </Text>
-              )}
+            {/* 2-column vertical grid of photos */}
+            <View style={styles.photoGrid}>
+              {sortPhotosByBest(photos).map((photo) => (
+                <PhotoTile
+                  key={photo.id}
+                  photo={photo}
+                  theme={theme}
+                  onNavigate={() => handleNavigateToPhoto(photo)}
+                  onOpenGallery={handleViewPhotos}
+                />
+              ))}
             </View>
-
-            {/* Navigate button */}
-            <Pressable
-              style={[styles.navigateButton, { backgroundColor: theme.ACCENT }]}
-              onPress={handleNavigate}
-            >
-              <Ionicons name="navigate" size={20} color="#FFF" />
-              <Text style={styles.navigateButtonText}>Navigate to landmark</Text>
+            <Pressable style={styles.seeAllButton} onPress={handleViewPhotos}>
+              <Text style={[styles.seeAllText, { color: theme.ACCENT }]}>
+                Open full gallery {photos.length > 0 ? `(${photos.length} photos)` : ''}
+              </Text>
+              <Ionicons name="chevron-forward" size={16} color={theme.ACCENT} />
             </Pressable>
-
-            {/* Photos section */}
-            <View style={styles.photosSection}>
-              <Text style={[styles.sectionTitle, { color: theme.TEXT }]}>Photos</Text>
-
-              {photosLoading === 'idle' && photos.length === 0 ? (
-                <Pressable
-                  style={[styles.loadPhotosButton, { backgroundColor: theme.BORDER }]}
-                  onPress={handleLoadPhotos}
-                >
-                  <Ionicons name="images-outline" size={20} color={theme.ACCENT} />
-                  <Text style={[styles.loadPhotosText, { color: theme.ACCENT }]}>
-                    Load photos
-                  </Text>
-                </Pressable>
-              ) : photosLoading === 'loading' ? (
-                <ActivityIndicator size="small" color={theme.ACCENT} style={styles.photosLoader} />
-              ) : photosLoading === 'error' ? (
-                <Pressable style={styles.loadPhotosButton} onPress={handleLoadPhotos}>
-                  <Text style={[styles.loadPhotosText, { color: theme.ACCENT }]}>
-                    Failed to load. Tap to retry
-                  </Text>
-                </Pressable>
-              ) : photos.length === 0 ? (
-                <View style={styles.noPhotosContainer}>
-                  <Ionicons name="images-outline" size={32} color={theme.TEXT_MUTED} />
-                  <Text style={[styles.noPhotosText, { color: theme.TEXT_MUTED }]}>
-                    No photos available
-                  </Text>
-                </View>
-              ) : (
-                <>
-                  {photoErrors > 0 && (
-                    <View style={[styles.photoErrorBanner, { backgroundColor: 'rgba(245, 158, 11, 0.2)' }]}>
-                      <Text style={styles.photoErrorText}>Some photos failed to load</Text>
-                      <Pressable onPress={handleLoadPhotos}>
-                        <Text style={[styles.photoRetryLink, { color: theme.ACCENT }]}>Retry</Text>
-                      </Pressable>
-                    </View>
-                  )}
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.photoThumbnails}
-                  >
-                    {photos.slice(0, 10).map((photo) => {
-                      const imageUrl = getPreferredPhotoUrl(photo.variants);
-                      if (!imageUrl) return null;
-                      return (
-                        <Pressable key={photo.id} onPress={handleViewPhotos}>
-                          <Image source={{ uri: imageUrl }} style={styles.photoThumbnail} />
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                  <Pressable style={styles.seeAllButton} onPress={handleViewPhotos}>
-                    <Text style={[styles.seeAllText, { color: theme.ACCENT }]}>
-                      See all photos {photos.length > 10 ? `(${photos.length})` : ''}
-                    </Text>
-                    <Ionicons name="chevron-forward" size={16} color={theme.ACCENT} />
-                  </Pressable>
-                </>
-              )}
-            </View>
           </>
-        ) : null}
+        )}
       </BottomSheetScrollView>
     );
 
@@ -623,6 +559,79 @@ function LandmarkRow({
         )}
       </View>
       <Ionicons name="chevron-forward" size={20} color={theme.TEXT_MUTED} />
+    </Pressable>
+  );
+}
+
+// Shared set to track which photo IDs have already logged errors (reduces noise)
+const loggedPhotoErrors = new Set<string>();
+
+// Photo tile component - simple version without URL fallbacks
+function PhotoTile({
+  photo,
+  theme,
+  onNavigate,
+  onOpenGallery,
+}: {
+  photo: Photo;
+  theme: ReturnType<typeof useTheme>;
+  onNavigate: () => void;
+  onOpenGallery: () => void;
+}) {
+  const imageUrl = useMemo(() => {
+    const url = getPreferredPhotoUrl(photo.variants);
+    return url ? normalizeImageUrl(url) : null;
+  }, [photo.variants]);
+  
+  const [failed, setFailed] = useState(false);
+  const [showActions, setShowActions] = useState(false);
+
+  const handleImageError = useCallback(() => {
+    setFailed(true);
+    // Log at most once per photo ID
+    if (!loggedPhotoErrors.has(photo.id)) {
+      loggedPhotoErrors.add(photo.id);
+      console.warn(`[PhotoTile] Image failed for photo: ${photo.id}`);
+    }
+  }, [photo.id]);
+
+  if (!imageUrl || failed) {
+    return (
+      <View style={[styles.photoTileContainer, styles.photoTilePlaceholder, { backgroundColor: theme.BORDER }]}>
+        <Ionicons name="image-outline" size={24} color={theme.TEXT_MUTED} />
+      </View>
+    );
+  }
+
+  return (
+    <Pressable
+      style={styles.photoTileContainer}
+      onPress={() => setShowActions(!showActions)}
+    >
+      <Image
+        source={{ uri: imageUrl }}
+        style={styles.photoTileImage}
+        resizeMode="cover"
+        onError={handleImageError}
+      />
+      {showActions && (
+        <View style={styles.photoTileOverlay}>
+          <Pressable
+            style={[styles.photoTileAction, { backgroundColor: theme.ACCENT }]}
+            onPress={onNavigate}
+          >
+            <Ionicons name="navigate" size={16} color="#FFF" />
+            <Text style={styles.photoTileActionText}>Navigate here</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.photoTileAction, { backgroundColor: theme.CARD }]}
+            onPress={onOpenGallery}
+          >
+            <Ionicons name="expand" size={16} color={theme.TEXT} />
+            <Text style={[styles.photoTileActionText, { color: theme.TEXT }]}>Full gallery</Text>
+          </Pressable>
+        </View>
+      )}
     </Pressable>
   );
 }
@@ -896,13 +905,51 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
-  photoThumbnails: {
-    gap: 10,
+  photoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: PHOTO_GRID_GAP,
   },
-  photoThumbnail: {
-    width: 100,
-    height: 100,
+  photoTileContainer: {
+    width: PHOTO_TILE_SIZE,
+    height: PHOTO_TILE_SIZE,
     borderRadius: 10,
+    overflow: 'hidden',
+  },
+  photoTileImage: {
+    width: '100%',
+    height: '100%',
+  },
+  photoTilePlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  photoTileOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+  },
+  photoTileAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    gap: 6,
+    width: '100%',
+  },
+  photoTileActionText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '600',
   },
   seeAllButton: {
     flexDirection: 'row',

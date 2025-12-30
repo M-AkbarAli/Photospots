@@ -1,31 +1,97 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-    ActivityIndicator,
-    Dimensions,
-    FlatList,
-    Image,
-    Linking,
-    Platform,
-    Pressable,
-    SafeAreaView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Dimensions,
+  Image,
+  Linking,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '../../constants/theme';
 import {
-    aggregateHotspotPhotos,
-    getPreferredPhotoUrl,
-    getSpotHotspots,
-    getSpotPhotos,
-    normalizeImageUrl,
+  getPreferredPhotoUrl,
+  getSpotPhotos,
+  normalizeImageUrl,
 } from '../../lib/api';
 import { getCachedPhotos, setCachedPhotos } from '../../lib/photoCache';
 import type { Photo } from '../../types/api';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const GRID_GAP = 8;
+const GRID_PADDING = 16;
+const TILE_SIZE = (SCREEN_WIDTH - GRID_PADDING * 2 - GRID_GAP) / 2;
+
+// Shared set to track logged errors (reduces noise)
+const loggedPhotoErrors = new Set<string>();
+
+/**
+ * Sort photos by "best" heuristic.
+ * TODO: Replace with real "best photo" ranking from backend.
+ */
+function sortPhotosByBest(photos: Photo[]): Photo[] {
+  return [...photos].sort((a, b) => {
+    const resA = (a.variants?.width || 0) * (a.variants?.height || 0);
+    const resB = (b.variants?.width || 0) * (b.variants?.height || 0);
+    if (resB !== resA) return resB - resA;
+    
+    const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return dateB - dateA;
+  });
+}
+
+// Photo tile - simple version without URL fallbacks
+function GalleryPhotoTile({
+  photo,
+  theme,
+  onPress,
+}: {
+  photo: Photo;
+  theme: ReturnType<typeof useTheme>;
+  onPress: () => void;
+}) {
+  const imageUrl = useMemo(() => {
+    const url = getPreferredPhotoUrl(photo.variants);
+    return url ? normalizeImageUrl(url) : null;
+  }, [photo.variants]);
+  
+  const [failed, setFailed] = useState(false);
+
+  const handleImageError = useCallback(() => {
+    setFailed(true);
+    if (!loggedPhotoErrors.has(photo.id)) {
+      loggedPhotoErrors.add(photo.id);
+      console.warn(`[GalleryPhotoTile] Image failed for photo: ${photo.id}`);
+    }
+  }, [photo.id]);
+
+  if (!imageUrl || failed) {
+    return (
+      <View style={[styles.gridTile, styles.gridTilePlaceholder, { backgroundColor: theme.BORDER }]}>
+        <Ionicons name="image-outline" size={32} color={theme.TEXT_MUTED} />
+      </View>
+    );
+  }
+
+  return (
+    <Pressable style={styles.gridTile} onPress={onPress}>
+      <Image
+        source={{ uri: imageUrl }}
+        style={styles.gridTileImage}
+        resizeMode="cover"
+        onError={handleImageError}
+      />
+    </Pressable>
+  );
+}
 
 export default function PhotoGalleryScreen() {
   const router = useRouter();
@@ -35,8 +101,10 @@ export default function PhotoGalleryScreen() {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [photoErrors, setPhotoErrors] = useState(0);
+  
+  // Modal state for viewing a photo and navigating
+  const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
+  const [modalImageFailed, setModalImageFailed] = useState(false);
 
   useEffect(() => {
     if (!spotId) return;
@@ -49,39 +117,18 @@ export default function PhotoGalleryScreen() {
       const cached = getCachedPhotos(spotId);
       if (cached && cached.photos.length > 0) {
         setPhotos(cached.photos);
-        setPhotoErrors(cached.errors);
         setLoading(false);
         return;
       }
 
       try {
-        // Strategy: fetch hotspots, then aggregate their photos
-        const hotspots = await getSpotHotspots(spotId);
-
-        if (hotspots.length > 0) {
-          const { photos: aggregatedPhotos, errors } = await aggregateHotspotPhotos(
-            hotspots,
-            { maxHotspots: 20, maxPhotos: 60, concurrency: 4 }
-          );
-          setPhotos(aggregatedPhotos);
-          setPhotoErrors(errors);
-          setCachedPhotos(spotId, aggregatedPhotos, errors);
-        } else {
-          // Fallback: get photos directly from the landmark
-          const directPhotos = await getSpotPhotos(spotId);
-          setPhotos(directPhotos);
-          setCachedPhotos(spotId, directPhotos, 0);
-        }
+        // Load landmark photos only (no hotspot aggregation)
+        const landmarkPhotos = await getSpotPhotos(spotId);
+        setPhotos(landmarkPhotos);
+        setCachedPhotos(spotId, landmarkPhotos, 0);
       } catch (err) {
         console.error('Failed to load photos:', err);
-        // Try direct photos as final fallback
-        try {
-          const directPhotos = await getSpotPhotos(spotId);
-          setPhotos(directPhotos);
-          setCachedPhotos(spotId, directPhotos, 0);
-        } catch {
-          setError('Failed to load photos');
-        }
+        setError('Failed to load photos');
       } finally {
         setLoading(false);
       }
@@ -94,10 +141,7 @@ export default function PhotoGalleryScreen() {
     router.back();
   }, [router]);
 
-  const handleNavigateToPhoto = useCallback(() => {
-    const photo = photos[currentIndex];
-    if (!photo) return;
-
+  const handleNavigateToPhoto = useCallback((photo: Photo) => {
     const { latitude, longitude } = photo.variants;
     const coordString = `${latitude},${longitude}`;
     const label = encodeURIComponent('Photo location');
@@ -110,63 +154,38 @@ export default function PhotoGalleryScreen() {
     Linking.openURL(url).catch(() => {
       if (Platform.OS === 'android') {
         Linking.openURL(`geo:${coordString}?q=${coordString}(${label})`).catch(() => {
-          Linking.openURL(
-            `https://www.google.com/maps/dir/?api=1&destination=${coordString}`
-          );
+          Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${coordString}`);
         });
         return;
       }
-
       Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${coordString}`);
     });
-  }, [photos, currentIndex]);
+  }, []);
 
-  const onViewableItemsChanged = useCallback(
-    ({ viewableItems }: { viewableItems: Array<{ index: number | null }> }) => {
-      if (viewableItems.length > 0 && viewableItems[0].index !== null) {
-        setCurrentIndex(viewableItems[0].index);
-      }
-    },
-    []
-  );
+  const openPhotoModal = useCallback((photo: Photo) => {
+    setSelectedPhoto(photo);
+    setModalImageFailed(false);
+  }, []);
 
-  const viewabilityConfig = {
-    itemVisiblePercentThreshold: 50,
-  };
+  const closePhotoModal = useCallback(() => {
+    setSelectedPhoto(null);
+  }, []);
 
-  const renderPhoto = useCallback(
-    ({ item }: { item: Photo }) => {
-      const imageUrl = getPreferredPhotoUrl(item.variants) || normalizeImageUrl(item.variants?.url_l);
+  const handleModalImageError = useCallback(() => {
+    setModalImageFailed(true);
+  }, []);
 
-      if (!imageUrl) {
-        return (
-          <View style={styles.photoContainer}>
-            <View style={styles.photoPlaceholder}>
-              <Ionicons name="image-outline" size={48} color={theme.TEXT_MUTED} />
-              <Text style={[styles.photoPlaceholderText, { color: theme.TEXT_MUTED }]}>Image unavailable</Text>
-            </View>
-          </View>
-        );
-      }
-
-      return (
-        <View style={styles.photoContainer}>
-          <Image
-            source={{ uri: imageUrl }}
-            style={styles.photo}
-            resizeMode="contain"
-            onError={(e) => console.warn('[PhotoGallery] Image failed:', item.id, e.nativeEvent.error)}
-          />
-        </View>
-      );
-    },
-    [theme]
-  );
+  // Get modal image URL
+  const modalImageUrl = useMemo(() => {
+    if (!selectedPhoto) return null;
+    const url = getPreferredPhotoUrl(selectedPhoto.variants);
+    return url ? normalizeImageUrl(url) : null;
+  }, [selectedPhoto]);
 
   if (loading) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.BG }]}>
-        <View style={[styles.loadingContainer, { backgroundColor: theme.BG }]}>
+        <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={theme.ACCENT} />
         </View>
       </SafeAreaView>
@@ -208,7 +227,7 @@ export default function PhotoGalleryScreen() {
         <Pressable style={styles.backButtonAbsolute} onPress={handleBack}>
           <Ionicons name="arrow-back" size={24} color={theme.TEXT} />
         </Pressable>
-        <View style={[styles.emptyContainer, styles.emptyFullHeight]}>
+        <View style={styles.emptyContainer}>
           <Ionicons name="images-outline" size={48} color={theme.BORDER} />
           <Text style={[styles.emptyText, { color: theme.TEXT }]}>No photos available</Text>
           <Pressable style={[styles.emptyActionButton, { backgroundColor: theme.BORDER }]} onPress={handleBack}>
@@ -219,55 +238,96 @@ export default function PhotoGalleryScreen() {
     );
   }
 
+  const sortedPhotos = sortPhotosByBest(photos);
+
   return (
-    <View style={[styles.container, { backgroundColor: theme.BG }]}>
-        <SafeAreaView style={styles.headerBar}>
-          <Pressable style={styles.backButtonInline} onPress={handleBack}>
-            <View style={[styles.iconBackground, { backgroundColor: theme.CARD }]}>
-              <Ionicons name="arrow-back" size={20} color={theme.ACCENT} />
-            </View>
-            <Text style={[styles.backButtonLabel, { color: theme.TEXT }]}>Back</Text>
-          </Pressable>
-        </SafeAreaView>
-
-        <FlatList
-          data={photos}
-          keyExtractor={(item) => item.id}
-          renderItem={renderPhoto}
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          onViewableItemsChanged={onViewableItemsChanged}
-          viewabilityConfig={viewabilityConfig}
-          getItemLayout={(_, index) => ({
-            length: SCREEN_WIDTH,
-            offset: SCREEN_WIDTH * index,
-            index,
-          })}
-        />
-
-        {/* Photo counter */}
-        <View style={styles.counterContainer}>
-          <Text style={styles.counterText}>
-            {currentIndex + 1} / {photos.length}
-          </Text>
-        </View>
-
-        {/* Navigate button */}
-        <View style={styles.bottomOverlay}>
-          <Pressable style={[styles.navigateButton, { backgroundColor: theme.ACCENT }]} onPress={handleNavigateToPhoto}>
-            <Ionicons name="navigate" size={20} color="#FFF" />
-            <Text style={styles.navigateButtonText}>Navigate to this photo spot</Text>
-          </Pressable>
-        </View>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.BG }]} edges={['top']}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Pressable style={styles.backButtonInline} onPress={handleBack}>
+          <View style={[styles.iconBackground, { backgroundColor: theme.CARD }]}>
+            <Ionicons name="arrow-back" size={20} color={theme.ACCENT} />
+          </View>
+          <Text style={[styles.backButtonLabel, { color: theme.TEXT }]}>Back</Text>
+        </Pressable>
+        <Text style={[styles.headerTitle, { color: theme.TEXT }]}>
+          {photos.length} photos
+        </Text>
       </View>
-    );
+
+      {/* Vertical 2-column grid */}
+      <ScrollView
+        contentContainerStyle={styles.gridContainer}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.grid}>
+          {sortedPhotos.map((photo) => (
+            <GalleryPhotoTile
+              key={photo.id}
+              photo={photo}
+              theme={theme}
+              onPress={() => openPhotoModal(photo)}
+            />
+          ))}
+        </View>
+      </ScrollView>
+
+      {/* Photo detail modal */}
+      <Modal
+        visible={selectedPhoto !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={closePhotoModal}
+      >
+        <View style={styles.modalOverlay}>
+          <SafeAreaView style={styles.modalContent}>
+            {/* Close button */}
+            <Pressable style={styles.modalCloseButton} onPress={closePhotoModal}>
+              <Ionicons name="close" size={28} color="#FFF" />
+            </Pressable>
+
+            {/* Image */}
+            <View style={styles.modalImageContainer}>
+              {modalImageFailed || !modalImageUrl ? (
+                <View style={styles.modalPlaceholder}>
+                  <Ionicons name="image-outline" size={64} color="rgba(255,255,255,0.5)" />
+                  <Text style={styles.modalPlaceholderText}>Image unavailable</Text>
+                </View>
+              ) : (
+                <Image
+                  source={{ uri: modalImageUrl }}
+                  style={styles.modalImage}
+                  resizeMode="contain"
+                  onError={handleModalImageError}
+                />
+              )}
+            </View>
+
+            {/* Navigate button */}
+            {selectedPhoto && (
+              <View style={styles.modalActions}>
+                <Pressable
+                  style={[styles.navigateButton, { backgroundColor: theme.ACCENT }]}
+                  onPress={() => {
+                    handleNavigateToPhoto(selectedPhoto);
+                    closePhotoModal();
+                  }}
+                >
+                  <Ionicons name="navigate" size={20} color="#FFF" />
+                  <Text style={styles.navigateButtonText}>Navigate to this photo spot</Text>
+                </Pressable>
+              </View>
+            )}
+          </SafeAreaView>
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    paddingTop: 64,
   },
   loadingContainer: {
     flex: 1,
@@ -301,39 +361,25 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 16,
   },
-  emptyFullHeight: {
-    flex: 1,
-    justifyContent: 'center',
+  emptyActionButton: {
+    marginTop: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
   },
-  photoContainer: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_HEIGHT,
-    justifyContent: 'center',
+  emptyActionText: {
+    fontWeight: '600',
+  },
+  header: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: GRID_PADDING,
+    paddingVertical: 12,
   },
-  photo: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_HEIGHT * 0.7,
-  },
-  photoPlaceholder: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_HEIGHT * 0.7,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 12,
-  },
-  photoPlaceholderText: {
+  headerTitle: {
     fontSize: 16,
-  },
-  headerBar: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    paddingTop: 16,
-    paddingHorizontal: 16,
-    zIndex: 10,
-    backgroundColor: 'transparent',
+    fontWeight: '500',
   },
   backButtonInline: {
     flexDirection: 'row',
@@ -350,36 +396,73 @@ const styles = StyleSheet.create({
   },
   backButtonAbsolute: {
     position: 'absolute',
-    top: 16,
+    top: 60,
     left: 16,
     zIndex: 10,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  counterContainer: {
+  gridContainer: {
+    paddingHorizontal: GRID_PADDING,
+    paddingBottom: 40,
+  },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: GRID_GAP,
+  },
+  gridTile: {
+    width: TILE_SIZE,
+    height: TILE_SIZE,
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  gridTileImage: {
+    width: '100%',
+    height: '100%',
+  },
+  gridTilePlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.95)',
+  },
+  modalContent: {
+    flex: 1,
+  },
+  modalCloseButton: {
     position: 'absolute',
-    top: 60,
+    top: 16,
     right: 16,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
+    zIndex: 10,
+    padding: 8,
   },
-  counterText: {
-    color: '#FFF',
-    fontSize: 14,
-    fontWeight: '500',
+  modalImageContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  bottomOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
+  modalImage: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_WIDTH,
+  },
+  modalPlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+  },
+  modalPlaceholderText: {
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: 16,
+  },
+  modalActions: {
     paddingHorizontal: 16,
     paddingBottom: 40,
     paddingTop: 16,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
   },
   navigateButton: {
     flexDirection: 'row',
@@ -393,14 +476,5 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontWeight: '600',
     fontSize: 16,
-  },
-  emptyActionButton: {
-    marginTop: 16,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  emptyActionText: {
-    fontWeight: '600',
   },
 });
