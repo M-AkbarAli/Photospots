@@ -6,9 +6,10 @@ import { normalizeImageUrl } from '../../lib/api';
 import type { Spot } from '../../types/api';
 
 interface MapMarkersProps {
-  spots: Spot[];
+  landmarks: Spot[];
   selectedSpotId: string | null;
-  onSpotSelect: (spotId: string) => void;
+  userLocation: [number, number] | null;
+  onMarkerPress: (landmark: Spot) => void;
   maxMarkers?: number;
 }
 
@@ -75,14 +76,15 @@ function MarkerCallout({ spot, isSelected, onPress }: MarkerCalloutProps) {
 }
 
 export function MapMarkers({
-  spots,
+  landmarks,
   selectedSpotId,
-  onSpotSelect,
+  userLocation,
+  onMarkerPress,
   maxMarkers = 30,
 }: MapMarkersProps) {
   // Sort by score desc or distance asc and limit markers
   const visibleSpots = useMemo(() => {
-    const sorted = [...spots].sort((a, b) => {
+    const sorted = [...landmarks].sort((a, b) => {
       // Prioritize by distance if available, then by score
       if (a.distanceMeters !== undefined && b.distanceMeters !== undefined) {
         return a.distanceMeters - b.distanceMeters;
@@ -90,13 +92,13 @@ export function MapMarkers({
       return (b.score || 0) - (a.score || 0);
     });
     return sorted.slice(0, maxMarkers);
-  }, [spots, maxMarkers]);
+  }, [landmarks, maxMarkers]);
 
   const handleMarkerPress = useCallback(
-    (spotId: string) => {
-      onSpotSelect(spotId);
+    (spot: Spot) => {
+      onMarkerPress(spot);
     },
-    [onSpotSelect]
+    [onMarkerPress]
   );
 
   return (
@@ -113,7 +115,7 @@ export function MapMarkers({
           <MarkerCallout
             spot={spot}
             isSelected={spot.id === selectedSpotId}
-            onPress={() => handleMarkerPress(spot.id)}
+            onPress={() => handleMarkerPress(spot)}
           />
         </Mapbox.MarkerView>
       ))}

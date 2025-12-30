@@ -13,12 +13,13 @@ import {
     View,
 } from 'react-native';
 import { CategoryChips } from '../components/Spot/CategoryChips';
-import { THEME } from '../constants/theme';
+import { useTheme } from '../constants/theme';
 import { filterLandmarks, searchSpots } from '../lib/api';
 import type { Spot } from '../types/api';
 
 export default function SearchScreen() {
   const router = useRouter();
+  const theme = useTheme();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Spot[]>([]);
   const [loading, setLoading] = useState(false);
@@ -69,15 +70,15 @@ export default function SearchScreen() {
   const renderItem = useCallback(
     ({ item }: { item: Spot }) => (
       <Pressable
-        style={styles.resultItem}
+        style={[styles.resultItem, { backgroundColor: theme.CARD, borderBottomColor: theme.BORDER }]}
         onPress={() => handleSelectSpot(item)}
       >
         <View style={styles.resultContent}>
-          <Text style={styles.resultName} numberOfLines={1}>
+          <Text style={[styles.resultName, { color: theme.TEXT }]} numberOfLines={1}>
             {item.name}
           </Text>
           {item.description && (
-            <Text style={styles.resultDescription} numberOfLines={2}>
+            <Text style={[styles.resultDescription, { color: theme.TEXT_MUTED }]} numberOfLines={2}>
               {item.description}
             </Text>
           )}
@@ -87,10 +88,10 @@ export default function SearchScreen() {
             </View>
           )}
         </View>
-        <Ionicons name="chevron-forward" size={20} color={THEME.TEXT_MUTED} />
+        <Ionicons name="chevron-forward" size={20} color={theme.TEXT_MUTED} />
       </Pressable>
     ),
-    [handleSelectSpot]
+    [handleSelectSpot, theme]
   );
 
   const renderEmpty = useCallback(() => {
@@ -98,31 +99,31 @@ export default function SearchScreen() {
     if (!hasSearched) {
       return (
         <View style={styles.emptyContainer}>
-          <Ionicons name="search" size={48} color={THEME.BORDER} />
-          <Text style={styles.emptyText}>Search for landmarks</Text>
+          <Ionicons name="search" size={48} color={theme.BORDER} />
+          <Text style={[styles.emptyText, { color: theme.TEXT_MUTED }]}>Search for landmarks</Text>
         </View>
       );
     }
     return (
       <View style={styles.emptyContainer}>
-        <Ionicons name="location-outline" size={48} color={THEME.BORDER} />
-        <Text style={styles.emptyText}>No landmarks found for "{query}"</Text>
+        <Ionicons name="location-outline" size={48} color={theme.BORDER} />
+        <Text style={[styles.emptyText, { color: theme.TEXT_MUTED }]}>No landmarks found for "{query}"</Text>
       </View>
     );
-  }, [loading, hasSearched, query]);
+  }, [loading, hasSearched, query, theme]);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.BG }]}>
+      <View style={[styles.header, { borderBottomColor: theme.BORDER, backgroundColor: theme.CARD }]}>
         <Pressable style={styles.backButton} onPress={handleBack}>
-          <Ionicons name="arrow-back" size={24} color={THEME.TEXT} />
+          <Ionicons name="arrow-back" size={24} color={theme.TEXT} />
         </Pressable>
-        <View style={styles.searchInputContainer}>
-          <Ionicons name="search" size={18} color={THEME.TEXT_MUTED} />
+        <View style={[styles.searchInputContainer, { backgroundColor: theme.BG }]}>
+          <Ionicons name="search" size={18} color={theme.TEXT_MUTED} />
           <TextInput
-            style={styles.searchInput}
+            style={[styles.searchInput, { color: theme.TEXT }]}
             placeholder="Search landmarks..."
-            placeholderTextColor={THEME.TEXT_MUTED}
+            placeholderTextColor={theme.TEXT_MUTED}
             value={query}
             onChangeText={setQuery}
             onSubmitEditing={handleSearch}
@@ -133,12 +134,12 @@ export default function SearchScreen() {
           />
           {query.length > 0 && (
             <Pressable onPress={() => setQuery('')}>
-              <Ionicons name="close-circle" size={18} color={THEME.TEXT_MUTED} />
+              <Ionicons name="close-circle" size={18} color={theme.TEXT_MUTED} />
             </Pressable>
           )}
         </View>
         <Pressable style={styles.searchButton} onPress={handleSearch}>
-          <Text style={styles.searchButtonText}>Search</Text>
+          <Text style={[styles.searchButtonText, { color: theme.ACCENT }]}>Search</Text>
         </Pressable>
       </View>
 
@@ -150,7 +151,7 @@ export default function SearchScreen() {
 
       {loading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={THEME.ACCENT} />
+          <ActivityIndicator size="large" color={theme.ACCENT} />
         </View>
       ) : (
         <FlatList
@@ -169,7 +170,6 @@ export default function SearchScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: THEME.BG,
   },
   header: {
     flexDirection: 'row',
@@ -178,8 +178,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     gap: 8,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.BORDER,
-    backgroundColor: THEME.CARD,
   },
   backButton: {
     padding: 8,
@@ -188,7 +186,6 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: THEME.BG,
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -197,19 +194,17 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 16,
-    color: THEME.TEXT,
   },
   searchButton: {
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
   searchButtonText: {
-    color: THEME.ACCENT,
     fontWeight: '600',
     fontSize: 15,
   },
   errorBanner: {
-    backgroundColor: '#FEE2E2',
+    backgroundColor: 'rgba(220, 38, 38, 0.15)',
     padding: 12,
   },
   errorText: {
@@ -228,11 +223,9 @@ const styles = StyleSheet.create({
   resultItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: THEME.CARD,
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.BORDER,
   },
   resultContent: {
     flex: 1,
@@ -241,11 +234,9 @@ const styles = StyleSheet.create({
   resultName: {
     fontSize: 16,
     fontWeight: '600',
-    color: THEME.TEXT,
   },
   resultDescription: {
     fontSize: 13,
-    color: THEME.TEXT_MUTED,
     marginTop: 4,
   },
   resultCategories: {
@@ -260,6 +251,5 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 15,
-    color: THEME.TEXT_MUTED,
   },
 });

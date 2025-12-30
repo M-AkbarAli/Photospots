@@ -14,7 +14,7 @@ import {
     Text,
     View,
 } from 'react-native';
-import { THEME } from '../../constants/theme';
+import { useTheme } from '../../constants/theme';
 import {
     aggregateHotspotPhotos,
     getPreferredPhotoUrl,
@@ -29,6 +29,7 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function PhotoGalleryScreen() {
   const router = useRouter();
+  const theme = useTheme();
   const { spotId } = useLocalSearchParams<{ spotId: string }>();
 
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -141,8 +142,8 @@ export default function PhotoGalleryScreen() {
         return (
           <View style={styles.photoContainer}>
             <View style={styles.photoPlaceholder}>
-              <Ionicons name="image-outline" size={48} color={THEME.TEXT_MUTED} />
-              <Text style={styles.photoPlaceholderText}>Image unavailable</Text>
+              <Ionicons name="image-outline" size={48} color={theme.TEXT_MUTED} />
+              <Text style={[styles.photoPlaceholderText, { color: theme.TEXT_MUTED }]}>Image unavailable</Text>
             </View>
           </View>
         );
@@ -159,14 +160,14 @@ export default function PhotoGalleryScreen() {
         </View>
       );
     },
-    []
+    [theme]
   );
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={THEME.ACCENT} />
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.BG }]}>
+        <View style={[styles.loadingContainer, { backgroundColor: theme.BG }]}>
+          <ActivityIndicator size="large" color={theme.ACCENT} />
         </View>
       </SafeAreaView>
     );
@@ -174,15 +175,15 @@ export default function PhotoGalleryScreen() {
 
   if (error) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.BG }]}>
         <Pressable style={styles.backButtonAbsolute} onPress={handleBack}>
-          <Ionicons name="arrow-back" size={24} color={THEME.CARD} />
+          <Ionicons name="arrow-back" size={24} color={theme.TEXT} />
         </Pressable>
         <View style={styles.errorContainer}>
-          <Ionicons name="alert-circle" size={48} color={THEME.TEXT_MUTED} />
-          <Text style={styles.errorText}>{error}</Text>
+          <Ionicons name="alert-circle" size={48} color={theme.TEXT_MUTED} />
+          <Text style={[styles.errorText, { color: theme.TEXT }]}>{error}</Text>
           <Pressable
-            style={styles.retryButton}
+            style={[styles.retryButton, { backgroundColor: theme.ACCENT }]}
             onPress={() => {
               setLoading(true);
               setError(null);
@@ -203,15 +204,15 @@ export default function PhotoGalleryScreen() {
 
   if (photos.length === 0) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.BG }]}>
         <Pressable style={styles.backButtonAbsolute} onPress={handleBack}>
-          <Ionicons name="arrow-back" size={24} color={THEME.TEXT} />
+          <Ionicons name="arrow-back" size={24} color={theme.TEXT} />
         </Pressable>
         <View style={[styles.emptyContainer, styles.emptyFullHeight]}>
-          <Ionicons name="images-outline" size={48} color={THEME.CARD} />
-          <Text style={styles.emptyText}>No photos available</Text>
-          <Pressable style={styles.emptyActionButton} onPress={handleBack}>
-            <Text style={styles.emptyActionText}>Back to spots</Text>
+          <Ionicons name="images-outline" size={48} color={theme.BORDER} />
+          <Text style={[styles.emptyText, { color: theme.TEXT }]}>No photos available</Text>
+          <Pressable style={[styles.emptyActionButton, { backgroundColor: theme.BORDER }]} onPress={handleBack}>
+            <Text style={[styles.emptyActionText, { color: theme.TEXT }]}>Back to spots</Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -219,13 +220,13 @@ export default function PhotoGalleryScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.BG }]}>
         <SafeAreaView style={styles.headerBar}>
           <Pressable style={styles.backButtonInline} onPress={handleBack}>
-            <View style={styles.iconBackground}>
-              <Ionicons name="arrow-back" size={20} color={THEME.ACCENT} />
+            <View style={[styles.iconBackground, { backgroundColor: theme.CARD }]}>
+              <Ionicons name="arrow-back" size={20} color={theme.ACCENT} />
             </View>
-            <Text style={styles.backButtonLabel}>Back</Text>
+            <Text style={[styles.backButtonLabel, { color: theme.TEXT }]}>Back</Text>
           </Pressable>
         </SafeAreaView>
 
@@ -254,8 +255,8 @@ export default function PhotoGalleryScreen() {
 
         {/* Navigate button */}
         <View style={styles.bottomOverlay}>
-          <Pressable style={styles.navigateButton} onPress={handleNavigateToPhoto}>
-            <Ionicons name="navigate" size={20} color={THEME.CARD} />
+          <Pressable style={[styles.navigateButton, { backgroundColor: theme.ACCENT }]} onPress={handleNavigateToPhoto}>
+            <Ionicons name="navigate" size={20} color="#FFF" />
             <Text style={styles.navigateButtonText}>Navigate to this photo spot</Text>
           </Pressable>
         </View>
@@ -266,14 +267,12 @@ export default function PhotoGalleryScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: THEME.TEXT,
     paddingTop: 64,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: THEME.TEXT,
   },
   errorContainer: {
     flex: 1,
@@ -282,17 +281,15 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   errorText: {
-    color: THEME.CARD,
     fontSize: 16,
   },
   retryButton: {
     paddingHorizontal: 20,
     paddingVertical: 10,
-    backgroundColor: THEME.ACCENT,
     borderRadius: 8,
   },
   retryButtonText: {
-    color: THEME.CARD,
+    color: '#FFF',
     fontWeight: '600',
   },
   emptyContainer: {
@@ -302,7 +299,6 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   emptyText: {
-    color: THEME.CARD,
     fontSize: 16,
   },
   emptyFullHeight: {
@@ -327,7 +323,6 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   photoPlaceholderText: {
-    color: THEME.TEXT_MUTED,
     fontSize: 16,
   },
   headerBar: {
@@ -346,12 +341,10 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   backButtonLabel: {
-    color: THEME.CARD,
     fontWeight: '600',
     fontSize: 16,
   },
   iconBackground: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
     borderRadius: 20,
     padding: 8,
   },
@@ -374,7 +367,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   counterText: {
-    color: THEME.CARD,
+    color: '#FFF',
     fontSize: 14,
     fontWeight: '500',
   },
@@ -392,13 +385,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: THEME.ACCENT,
     paddingVertical: 14,
     borderRadius: 12,
     gap: 8,
   },
   navigateButtonText: {
-    color: THEME.CARD,
+    color: '#FFF',
     fontWeight: '600',
     fontSize: 16,
   },
@@ -407,10 +399,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
   },
   emptyActionText: {
-    color: THEME.CARD,
     fontWeight: '600',
   },
 });

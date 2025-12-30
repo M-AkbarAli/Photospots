@@ -1,45 +1,44 @@
 import { Ionicons } from '@expo/vector-icons';
 import BottomSheet, {
-  BottomSheetFlatList,
-  BottomSheetScrollView,
-  BottomSheetTextInput,
+    BottomSheetFlatList,
+    BottomSheetScrollView,
+    BottomSheetTextInput,
 } from '@gorhom/bottom-sheet';
-import type { BottomSheetMethods } from '@gorhom/bottom-sheet/lib/typescript/types';
 import { useRouter } from 'expo-router';
 import React, {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useMemo,
-  useRef,
-  useState,
+    forwardRef,
+    useCallback,
+    useEffect,
+    useImperativeHandle,
+    useMemo,
+    useRef,
+    useState,
 } from 'react';
 import {
-  ActivityIndicator,
-  Image,
-  Keyboard,
-  Linking,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Image,
+    Keyboard,
+    Linking,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
-import { useTheme } from '../../constants/theme';
+import { useTheme } from '../constants/theme';
 import {
-  aggregateHotspotPhotos,
-  filterLandmarks,
-  getPreferredPhotoUrl,
-  getSpotById,
-  getSpotHotspots,
-  getSpotPhotos,
-  normalizeImageUrl,
-  searchSpots,
-} from '../../lib/api';
-import { getCachedPhotos, setCachedPhotos } from '../../lib/photoCache';
-import type { Photo, Spot } from '../../types/api';
+    aggregateHotspotPhotos,
+    filterLandmarks,
+    getPreferredPhotoUrl,
+    getSpotById,
+    getSpotHotspots,
+    getSpotPhotos,
+    normalizeImageUrl,
+    searchSpots,
+} from '../lib/api';
+import { getCachedPhotos, setCachedPhotos } from '../lib/photoCache';
+import type { Photo, Spot } from '../types/api';
 
 type SheetMode = 'browse' | 'details' | 'search';
 type LoadingState = 'idle' | 'loading' | 'error';
@@ -327,10 +326,10 @@ export const MainBottomSheet = forwardRef<MainBottomSheetRef, MainBottomSheetPro
             </Text>
           </View>
         ) : (
-          <BottomSheetFlatList
+          <BottomSheetFlatList<Spot>
             data={landmarks}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
+            keyExtractor={(item: Spot) => item.id}
+            renderItem={({ item }: { item: Spot }) => (
               <LandmarkRow
                 landmark={item}
                 theme={theme}
@@ -390,10 +389,10 @@ export const MainBottomSheet = forwardRef<MainBottomSheetRef, MainBottomSheetPro
             </Text>
           </View>
         ) : (
-          <BottomSheetFlatList
+          <BottomSheetFlatList<Spot>
             data={searchResults}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
+            keyExtractor={(item: Spot) => item.id}
+            renderItem={({ item }: { item: Spot }) => (
               <LandmarkRow
                 landmark={item}
                 theme={theme}
@@ -437,7 +436,7 @@ export const MainBottomSheet = forwardRef<MainBottomSheetRef, MainBottomSheetPro
                 if (selectedSpotId) {
                   setSpotLoading('loading');
                   getSpotById(selectedSpotId)
-                    .then((data) => {
+                    .then((data: Spot) => {
                       setSpot(data);
                       setSpotLoading('idle');
                     })

@@ -1,6 +1,6 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { THEME } from '../../constants/theme';
+import { useTheme } from '../../constants/theme';
 
 interface CategoryChipsProps {
   categories: string[];
@@ -8,6 +8,7 @@ interface CategoryChipsProps {
 }
 
 export function CategoryChips({ categories, maxDisplay }: CategoryChipsProps) {
+  const theme = useTheme();
   const displayCategories = maxDisplay
     ? categories.slice(0, maxDisplay)
     : categories;
@@ -24,13 +25,13 @@ export function CategoryChips({ categories, maxDisplay }: CategoryChipsProps) {
       contentContainerStyle={styles.container}
     >
       {displayCategories.map((category, index) => (
-        <View key={`${category}-${index}`} style={styles.chip}>
-          <Text style={styles.chipText}>{category}</Text>
+        <View key={`${category}-${index}`} style={[styles.chip, { backgroundColor: `${theme.ACCENT}20` }]}>
+          <Text style={[styles.chipText, { color: theme.ACCENT }]}>{category}</Text>
         </View>
       ))}
       {remaining > 0 && (
-        <View style={[styles.chip, styles.moreChip]}>
-          <Text style={styles.moreChipText}>+{remaining}</Text>
+        <View style={[styles.chip, { backgroundColor: theme.BORDER }]}>
+          <Text style={[styles.moreChipText, { color: theme.TEXT_MUTED }]}>+{remaining}</Text>
         </View>
       )}
     </ScrollView>
@@ -44,22 +45,16 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   chip: {
-    backgroundColor: `${THEME.ACCENT}15`,
     borderRadius: 12,
     paddingHorizontal: 10,
     paddingVertical: 4,
   },
   chipText: {
     fontSize: 12,
-    color: THEME.ACCENT,
     fontWeight: '500',
-  },
-  moreChip: {
-    backgroundColor: THEME.BORDER,
   },
   moreChipText: {
     fontSize: 12,
-    color: THEME.TEXT_MUTED,
     fontWeight: '500',
   },
 });

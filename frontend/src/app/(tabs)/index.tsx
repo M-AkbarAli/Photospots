@@ -1,4 +1,3 @@
-import BottomSheet from '@gorhom/bottom-sheet';
 import Mapbox from '@rnmapbox/maps';
 import * as Location from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -6,12 +5,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
-import { NearbyLandmarksPanel } from '../../components/Map/NearbyLandmarksPanel';
+import { MainBottomSheet, type MainBottomSheetRef } from '../../components/MainBottomSheet';
+import { MapMarkers } from '../../components/Map/MapMarkers';
 import { SearchPill } from '../../components/Map/SearchPill';
 import { SearchThisAreaPill } from '../../components/Map/SearchThisAreaPill';
-import { SpotLayers, type SpotLayersRef } from '../../components/Map/SpotLayers';
-import { SpotBottomSheet } from '../../components/Spot/SpotBottomSheet';
-import { THEME } from '../../constants/theme';
+import { useMapStyle, useTheme } from '../../constants/theme';
 import { filterLandmarks, getNearbySpots } from '../../lib/api';
 import { distanceFromCoordinates } from '../../lib/geo';
 import {
@@ -41,6 +39,8 @@ const ZOOM_THRESHOLD = 1.0;
 
 export default function MapScreen() {
   const router = useRouter();
+  const theme = useTheme();
+  const mapStyle = useMapStyle();
   const params = useLocalSearchParams<{
     selectedSpotId?: string;
     centerLng?: string;
@@ -49,8 +49,7 @@ export default function MapScreen() {
 
   // Refs
   const cameraRef = useRef<Mapbox.Camera>(null);
-  const spotLayersRef = useRef<SpotLayersRef>(null);
-  const bottomSheetRef = useRef<BottomSheet>(null);
+  const bottomSheetRef = useRef<MainBottomSheetRef>(null);
   const isCameraAnimatingRef = useRef(false);
 
   // Location state
@@ -262,7 +261,7 @@ export default function MapScreen() {
     bottomSheetRef.current?.snapToIndex(1);
   }, []);
 
-  // Handle landmark selection from panel
+  // Handle landmark selection from panel or markers
   const handleLandmarkSelect = useCallback((landmark: Spot) => {
     // Animate to the landmark
     cameraRef.current?.setCamera({
@@ -274,6 +273,11 @@ export default function MapScreen() {
     setSelectedSpotId(landmark.id);
     bottomSheetRef.current?.snapToIndex(1);
   }, []);
+
+  // Handle marker press (from MapMarkers)
+  const handleMarkerPress = useCallback((landmark: Spot) => {
+    handleLandmarkSelect(landmark);
+  }, [handleLandmarkSelect]);
 
   // Handle bottom sheet close
   const handleBottomSheetClose = useCallback(() => {
@@ -294,10 +298,10 @@ export default function MapScreen() {
   const selectedSpot = spots.find((s) => s.id === selectedSpotId) || null;
 
   return (
-    <GestureHandlerRootView style={styles.container}>
+    <GestureHandlerRootView style={[styles.container, { backgroundColor: theme.BG }]}>
       <Mapbox.MapView
         style={styles.map}
-        styleURL={Mapbox.StyleURL.Street}
+        styleURL={mapStyle}
         onCameraChanged={handleCameraChanged}
         onMapIdle={handleMapIdle}
         logoEnabled={false}
@@ -311,19 +315,19 @@ export default function MapScreen() {
           }}
         />
 
-        {/* Landmark markers (red pins) */}
-        <SpotLayers
-          ref={spotLayersRef}
-          spots={landmarks}
+        {/* Landmark markers (callout cards with thumbnails) */}
+        <MapMarkers
+          landmarks={landmarks}
           selectedSpotId={selectedSpotId}
-          onSpotSelect={handleSpotSelect}
+          userLocation={userCoordinates}
+          onMarkerPress={handleMarkerPress}
         />
       </Mapbox.MapView>
 
       {/* Location denied banner */}
       {locationDenied && !selectedSpotId && (
-        <View style={styles.locationBanner}>
-          <Text style={styles.locationBannerText}>
+        <View style={[styles.locationBanner, { backgroundColor: theme.CARD }]}>
+          <Text style={[styles.locationBannerText, { color: theme.TEXT_MUTED }]}>
             Using default location — enable location for nearby landmarks.
           </Text>
         </View>
@@ -344,26 +348,18 @@ export default function MapScreen() {
         </View>
       )}
 
-      {/* Nearby landmarks panel - shown when no spot is selected */}
-      {!selectedSpotId && (
-        <NearbyLandmarksPanel
-          landmarks={landmarks}
-          loading={isSearching}
-          error={fetchError}
-          onSelectLandmark={handleLandmarkSelect}
-          onRetry={handleRetryFetch}
-        />
-      )}
-
-      {/* Landmark details bottom sheet */}
-      {selectedSpotId && (
-        <SpotBottomSheet
-          spotId={selectedSpotId}
-          initialSpot={selectedSpot}
-          bottomSheetRef={bottomSheetRef}
-          onClose={handleBottomSheetClose}
-        />
-      )}
+      {/* Unified bottom sheet (Browse + Details) */}
+      <MainBottomSheet
+        ref={bottomSheetRef}
+        landmarks={landmarks}
+        selectedSpotId={selectedSpotId}
+        initialSpot={selectedSpot}
+        loading={isSearching}
+        error={fetchError}
+        onSelectLandmark={handleLandmarkSelect}
+        onClose={handleBottomSheetClose}
+        onRetry={handleRetryFetch}
+      />
     </GestureHandlerRootView>
   );
 }
@@ -371,7 +367,6 @@ export default function MapScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
   },
   map: {
     ...StyleSheet.absoluteFillObject,
@@ -381,7 +376,6 @@ const styles = StyleSheet.create({
     top: 100,
     left: 16,
     right: 16,
-    backgroundColor: THEME.CARD,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -393,7 +387,6 @@ const styles = StyleSheet.create({
   },
   locationBannerText: {
     fontSize: 13,
-    color: THEME.TEXT_MUTED,
     textAlign: 'center',
   },
   topPillContainer: {
