@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { CategoryChips } from '../components/Spot/CategoryChips';
 import { THEME } from '../constants/theme';
-import { searchSpots } from '../lib/api';
+import { filterLandmarks, searchSpots } from '../lib/api';
 import type { Spot } from '../types/api';
 
 export default function SearchScreen() {
@@ -35,7 +35,9 @@ export default function SearchScreen() {
 
     try {
       const spots = await searchSpots(query.trim());
-      setResults(spots);
+      // Filter to only show landmarks
+      const landmarks = filterLandmarks(spots);
+      setResults(landmarks);
     } catch (err) {
       console.error('Search failed:', err);
       setError('Search failed. Please try again.');
@@ -97,14 +99,14 @@ export default function SearchScreen() {
       return (
         <View style={styles.emptyContainer}>
           <Ionicons name="search" size={48} color={THEME.BORDER} />
-          <Text style={styles.emptyText}>Search for photo spots</Text>
+          <Text style={styles.emptyText}>Search for landmarks</Text>
         </View>
       );
     }
     return (
       <View style={styles.emptyContainer}>
         <Ionicons name="location-outline" size={48} color={THEME.BORDER} />
-        <Text style={styles.emptyText}>No spots found for "{query}"</Text>
+        <Text style={styles.emptyText}>No landmarks found for "{query}"</Text>
       </View>
     );
   }, [loading, hasSearched, query]);
@@ -119,7 +121,7 @@ export default function SearchScreen() {
           <Ionicons name="search" size={18} color={THEME.TEXT_MUTED} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search spots..."
+            placeholder="Search landmarks..."
             placeholderTextColor={THEME.TEXT_MUTED}
             value={query}
             onChangeText={setQuery}

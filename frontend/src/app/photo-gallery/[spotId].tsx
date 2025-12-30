@@ -15,7 +15,14 @@ import {
     View,
 } from 'react-native';
 import { THEME } from '../../constants/theme';
-import { getSpotPhotos } from '../../lib/api';
+import {
+    aggregateHotspotPhotos,
+    getPreferredPhotoUrl,
+    getSpotHotspots,
+    getSpotPhotos,
+    normalizeImageUrl,
+} from '../../lib/api';
+import { getCachedPhotos, setCachedPhotos } from '../../lib/photoCache';
 import type { Photo } from '../../types/api';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -28,6 +35,7 @@ export default function PhotoGalleryScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [photoErrors, setPhotoErrors] = useState(0);
 
   useEffect(() => {
     if (!spotId) return;
@@ -35,12 +43,44 @@ export default function PhotoGalleryScreen() {
     const loadPhotos = async () => {
       setLoading(true);
       setError(null);
+
+      // Check cache first
+      const cached = getCachedPhotos(spotId);
+      if (cached && cached.photos.length > 0) {
+        setPhotos(cached.photos);
+        setPhotoErrors(cached.errors);
+        setLoading(false);
+        return;
+      }
+
       try {
-        const data = await getSpotPhotos(spotId);
-        setPhotos(data);
+        // Strategy: fetch hotspots, then aggregate their photos
+        const hotspots = await getSpotHotspots(spotId);
+
+        if (hotspots.length > 0) {
+          const { photos: aggregatedPhotos, errors } = await aggregateHotspotPhotos(
+            hotspots,
+            { maxHotspots: 20, maxPhotos: 60, concurrency: 4 }
+          );
+          setPhotos(aggregatedPhotos);
+          setPhotoErrors(errors);
+          setCachedPhotos(spotId, aggregatedPhotos, errors);
+        } else {
+          // Fallback: get photos directly from the landmark
+          const directPhotos = await getSpotPhotos(spotId);
+          setPhotos(directPhotos);
+          setCachedPhotos(spotId, directPhotos, 0);
+        }
       } catch (err) {
         console.error('Failed to load photos:', err);
-        setError('Failed to load photos');
+        // Try direct photos as final fallback
+        try {
+          const directPhotos = await getSpotPhotos(spotId);
+          setPhotos(directPhotos);
+          setCachedPhotos(spotId, directPhotos, 0);
+        } catch {
+          setError('Failed to load photos');
+        }
       } finally {
         setLoading(false);
       }
@@ -58,16 +98,25 @@ export default function PhotoGalleryScreen() {
     if (!photo) return;
 
     const { latitude, longitude } = photo.variants;
+    const coordString = `${latitude},${longitude}`;
+    const label = encodeURIComponent('Photo location');
 
     const url =
       Platform.OS === 'ios'
-        ? `maps://app?daddr=${latitude},${longitude}`
-        : `geo:${latitude},${longitude}?q=${latitude},${longitude}`;
+        ? `http://maps.apple.com/?daddr=${coordString}&ll=${coordString}&q=${label}`
+        : `google.navigation:q=${coordString}`;
 
     Linking.openURL(url).catch(() => {
-      Linking.openURL(
-        `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`
-      );
+      if (Platform.OS === 'android') {
+        Linking.openURL(`geo:${coordString}?q=${coordString}(${label})`).catch(() => {
+          Linking.openURL(
+            `https://www.google.com/maps/dir/?api=1&destination=${coordString}`
+          );
+        });
+        return;
+      }
+
+      Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${coordString}`);
     });
   }, [photos, currentIndex]);
 
@@ -85,15 +134,31 @@ export default function PhotoGalleryScreen() {
   };
 
   const renderPhoto = useCallback(
-    ({ item }: { item: Photo }) => (
-      <View style={styles.photoContainer}>
-        <Image
-          source={{ uri: item.variants.url_l }}
-          style={styles.photo}
-          resizeMode="contain"
-        />
-      </View>
-    ),
+    ({ item }: { item: Photo }) => {
+      const imageUrl = getPreferredPhotoUrl(item.variants) || normalizeImageUrl(item.variants?.url_l);
+
+      if (!imageUrl) {
+        return (
+          <View style={styles.photoContainer}>
+            <View style={styles.photoPlaceholder}>
+              <Ionicons name="image-outline" size={48} color={THEME.TEXT_MUTED} />
+              <Text style={styles.photoPlaceholderText}>Image unavailable</Text>
+            </View>
+          </View>
+        );
+      }
+
+      return (
+        <View style={styles.photoContainer}>
+          <Image
+            source={{ uri: imageUrl }}
+            style={styles.photo}
+            resizeMode="contain"
+            onError={(e) => console.warn('[PhotoGallery] Image failed:', item.id, e.nativeEvent.error)}
+          />
+        </View>
+      );
+    },
     []
   );
 
@@ -111,7 +176,7 @@ export default function PhotoGalleryScreen() {
     return (
       <SafeAreaView style={styles.container}>
         <Pressable style={styles.backButtonAbsolute} onPress={handleBack}>
-          <Ionicons name="arrow-back" size={24} color={THEME.TEXT} />
+          <Ionicons name="arrow-back" size={24} color={THEME.CARD} />
         </Pressable>
         <View style={styles.errorContainer}>
           <Ionicons name="alert-circle" size={48} color={THEME.TEXT_MUTED} />
@@ -142,9 +207,12 @@ export default function PhotoGalleryScreen() {
         <Pressable style={styles.backButtonAbsolute} onPress={handleBack}>
           <Ionicons name="arrow-back" size={24} color={THEME.TEXT} />
         </Pressable>
-        <View style={styles.emptyContainer}>
-          <Ionicons name="images-outline" size={48} color={THEME.TEXT_MUTED} />
+        <View style={[styles.emptyContainer, styles.emptyFullHeight]}>
+          <Ionicons name="images-outline" size={48} color={THEME.CARD} />
           <Text style={styles.emptyText}>No photos available</Text>
+          <Pressable style={styles.emptyActionButton} onPress={handleBack}>
+            <Text style={styles.emptyActionText}>Back to spots</Text>
+          </Pressable>
         </View>
       </SafeAreaView>
     );
@@ -152,51 +220,54 @@ export default function PhotoGalleryScreen() {
 
   return (
     <View style={styles.container}>
-      <FlatList
-        data={photos}
-        keyExtractor={(item) => item.id}
-        renderItem={renderPhoto}
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        onViewableItemsChanged={onViewableItemsChanged}
-        viewabilityConfig={viewabilityConfig}
-        getItemLayout={(_, index) => ({
-          length: SCREEN_WIDTH,
-          offset: SCREEN_WIDTH * index,
-          index,
-        })}
-      />
+        <SafeAreaView style={styles.headerBar}>
+          <Pressable style={styles.backButtonInline} onPress={handleBack}>
+            <View style={styles.iconBackground}>
+              <Ionicons name="arrow-back" size={20} color={THEME.ACCENT} />
+            </View>
+            <Text style={styles.backButtonLabel}>Back</Text>
+          </Pressable>
+        </SafeAreaView>
 
-      {/* Back button */}
-      <Pressable style={styles.backButtonAbsolute} onPress={handleBack}>
-        <View style={styles.iconBackground}>
-          <Ionicons name="arrow-back" size={24} color={THEME.TEXT} />
+        <FlatList
+          data={photos}
+          keyExtractor={(item) => item.id}
+          renderItem={renderPhoto}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onViewableItemsChanged={onViewableItemsChanged}
+          viewabilityConfig={viewabilityConfig}
+          getItemLayout={(_, index) => ({
+            length: SCREEN_WIDTH,
+            offset: SCREEN_WIDTH * index,
+            index,
+          })}
+        />
+
+        {/* Photo counter */}
+        <View style={styles.counterContainer}>
+          <Text style={styles.counterText}>
+            {currentIndex + 1} / {photos.length}
+          </Text>
         </View>
-      </Pressable>
 
-      {/* Photo counter */}
-      <View style={styles.counterContainer}>
-        <Text style={styles.counterText}>
-          {currentIndex + 1} / {photos.length}
-        </Text>
+        {/* Navigate button */}
+        <View style={styles.bottomOverlay}>
+          <Pressable style={styles.navigateButton} onPress={handleNavigateToPhoto}>
+            <Ionicons name="navigate" size={20} color={THEME.CARD} />
+            <Text style={styles.navigateButtonText}>Navigate to this photo spot</Text>
+          </Pressable>
+        </View>
       </View>
-
-      {/* Navigate button */}
-      <View style={styles.bottomOverlay}>
-        <Pressable style={styles.navigateButton} onPress={handleNavigateToPhoto}>
-          <Ionicons name="navigate" size={20} color={THEME.CARD} />
-          <Text style={styles.navigateButtonText}>Navigate to this photo spot</Text>
-        </Pressable>
-      </View>
-    </View>
-  );
+    );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: THEME.TEXT,
+    paddingTop: 64,
   },
   loadingContainer: {
     flex: 1,
@@ -234,6 +305,10 @@ const styles = StyleSheet.create({
     color: THEME.CARD,
     fontSize: 16,
   },
+  emptyFullHeight: {
+    flex: 1,
+    justifyContent: 'center',
+  },
   photoContainer: {
     width: SCREEN_WIDTH,
     height: SCREEN_HEIGHT,
@@ -244,16 +319,50 @@ const styles = StyleSheet.create({
     width: SCREEN_WIDTH,
     height: SCREEN_HEIGHT * 0.7,
   },
-  backButtonAbsolute: {
+  photoPlaceholder: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT * 0.7,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+  },
+  photoPlaceholderText: {
+    color: THEME.TEXT_MUTED,
+    fontSize: 16,
+  },
+  headerBar: {
     position: 'absolute',
-    top: 60,
-    left: 16,
+    top: 0,
+    left: 0,
+    right: 0,
+    paddingTop: 16,
+    paddingHorizontal: 16,
     zIndex: 10,
+    backgroundColor: 'transparent',
+  },
+  backButtonInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  backButtonLabel: {
+    color: THEME.CARD,
+    fontWeight: '600',
+    fontSize: 16,
   },
   iconBackground: {
     backgroundColor: 'rgba(255, 255, 255, 0.9)',
     borderRadius: 20,
     padding: 8,
+  },
+  backButtonAbsolute: {
+    position: 'absolute',
+    top: 16,
+    left: 16,
+    zIndex: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   counterContainer: {
     position: 'absolute',
@@ -292,5 +401,16 @@ const styles = StyleSheet.create({
     color: THEME.CARD,
     fontWeight: '600',
     fontSize: 16,
+  },
+  emptyActionButton: {
+    marginTop: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  emptyActionText: {
+    color: THEME.CARD,
+    fontWeight: '600',
   },
 });

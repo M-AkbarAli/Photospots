@@ -4,18 +4,26 @@ import type { BottomSheetMethods } from '@gorhom/bottom-sheet/lib/typescript/typ
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-    ActivityIndicator,
-    Image,
-    Linking,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Image,
+  Linking,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 import { THEME } from '../../constants/theme';
-import { getSpotById, getSpotPhotos } from '../../lib/api';
+import {
+  aggregateHotspotPhotos,
+  getPreferredPhotoUrl,
+  getSpotById,
+  getSpotHotspots,
+  getSpotPhotos,
+  normalizeImageUrl,
+} from '../../lib/api';
+import { getCachedPhotos, setCachedPhotos } from '../../lib/photoCache';
 import type { Photo, Spot } from '../../types/api';
 import { CategoryChips } from './CategoryChips';
 
@@ -41,6 +49,7 @@ export function SpotBottomSheet({
   const [spotLoading, setSpotLoading] = useState<LoadingState>('idle');
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [photosLoading, setPhotosLoading] = useState<LoadingState>('idle');
+  const [photoErrors, setPhotoErrors] = useState(0);
   const [currentSnapIndex, setCurrentSnapIndex] = useState(0);
 
   // Load spot details when spotId changes
@@ -55,7 +64,15 @@ export function SpotBottomSheet({
       setSpotLoading('loading');
       try {
         const data = await getSpotById(spotId);
-        setSpot(data);
+
+        // Some spot detail responses omit photoUrl; keep initialSpot's photoUrl as fallback.
+        const merged: Spot = {
+          ...(initialSpot || {}),
+          ...data,
+          photoUrl: data.photoUrl ?? initialSpot?.photoUrl,
+        };
+
+        setSpot(merged);
         setSpotLoading('idle');
       } catch (error) {
         console.error('Failed to load spot:', error);
@@ -66,17 +83,53 @@ export function SpotBottomSheet({
     loadSpot();
   }, [spotId]);
 
+  // Load photos from hotspots (aggregated gallery)
   const handleLoadPhotos = useCallback(async () => {
     if (!spotId || photosLoading === 'loading') return;
 
+    // Check cache first
+    const cached = getCachedPhotos(spotId);
+    if (cached) {
+      setPhotos(cached.photos);
+      setPhotoErrors(cached.errors);
+      setPhotosLoading('idle');
+      return;
+    }
+
     setPhotosLoading('loading');
+    setPhotoErrors(0);
+
     try {
-      const data = await getSpotPhotos(spotId);
-      setPhotos(data);
+      // Strategy: fetch hotspots, then aggregate their photos
+      const hotspots = await getSpotHotspots(spotId);
+
+      if (hotspots.length > 0) {
+        const { photos: aggregatedPhotos, errors } = await aggregateHotspotPhotos(
+          hotspots,
+          { maxHotspots: 20, maxPhotos: 60, concurrency: 4 }
+        );
+        setPhotos(aggregatedPhotos);
+        setPhotoErrors(errors);
+        setCachedPhotos(spotId, aggregatedPhotos, errors);
+      } else {
+        // Fallback: get photos directly from the landmark
+        const directPhotos = await getSpotPhotos(spotId);
+        setPhotos(directPhotos);
+        setCachedPhotos(spotId, directPhotos, 0);
+      }
+
       setPhotosLoading('idle');
     } catch (error) {
       console.error('Failed to load photos:', error);
-      setPhotosLoading('error');
+      // Try direct photos as final fallback
+      try {
+        const directPhotos = await getSpotPhotos(spotId);
+        setPhotos(directPhotos);
+        setCachedPhotos(spotId, directPhotos, 0);
+        setPhotosLoading('idle');
+      } catch {
+        setPhotosLoading('error');
+      }
     }
   }, [spotId, photosLoading]);
 
@@ -85,23 +138,29 @@ export function SpotBottomSheet({
 
     const { latitude, longitude, name } = spot;
     const label = encodeURIComponent(name);
+    const coordString = `${latitude},${longitude}`;
 
     const url =
       Platform.OS === 'ios'
-        ? `maps://app?daddr=${latitude},${longitude}&q=${label}`
-        : `geo:${latitude},${longitude}?q=${latitude},${longitude}(${label})`;
+        ? `http://maps.apple.com/?daddr=${coordString}&ll=${coordString}&q=${label}`
+        : `google.navigation:q=${coordString}`;
 
     Linking.openURL(url).catch(() => {
-      // Fallback to Google Maps web
-      Linking.openURL(
-        `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`
-      );
+      if (Platform.OS === 'android') {
+        Linking.openURL(`geo:${coordString}?q=${coordString}(${label})`).catch(() => {
+          Linking.openURL(
+            `https://www.google.com/maps/dir/?api=1&destination=${coordString}`
+          );
+        });
+        return;
+      }
+
+      Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${coordString}`);
     });
   }, [spot]);
 
   const handleViewPhotos = useCallback(() => {
     if (!spotId) return;
-    // @ts-expect-error - route exists but types not regenerated
     router.push(`/photo-gallery/${spotId}`);
   }, [spotId, router]);
 
@@ -195,23 +254,34 @@ export function SpotBottomSheet({
                 </Text>
                 <View style={styles.headerMeta}>{headerMetaChildren}</View>
               </View>
-              {spot.photoUrl && currentSnapIndex === 0 && (
+              {normalizeImageUrl(spot.photoUrl) && currentSnapIndex === 0 ? (
                 <Image
-                  source={{ uri: spot.photoUrl }}
+                  source={{ uri: normalizeImageUrl(spot.photoUrl)! }}
                   style={styles.thumbnailSmall}
+                  onError={(e) => console.warn('[SpotBottomSheet] Thumbnail failed:', e.nativeEvent.error)}
                 />
-              )}
+              ) : currentSnapIndex === 0 ? (
+                <View style={[styles.thumbnailSmall, styles.placeholderImage]}>
+                  <Ionicons name="image-outline" size={24} color={THEME.TEXT_MUTED} />
+                </View>
+              ) : null}
             </View>
 
             {/* Mid/Full view content */}
             {currentSnapIndex >= 1 && (
               <>
-                {spot.photoUrl && (
+                {normalizeImageUrl(spot.photoUrl) ? (
                   <Image
-                    source={{ uri: spot.photoUrl }}
+                    source={{ uri: normalizeImageUrl(spot.photoUrl)! }}
                     style={styles.heroImage}
                     resizeMode="cover"
+                    onError={(e) => console.warn('[SpotBottomSheet] Hero image failed:', e.nativeEvent.error)}
                   />
+                ) : (
+                  <View style={[styles.heroImage, styles.placeholderHero]}>
+                    <Ionicons name="image-outline" size={48} color={THEME.TEXT_MUTED} />
+                    <Text style={styles.placeholderText}>No photo available</Text>
+                  </View>
                 )}
 
                 {spot.description && (
@@ -282,31 +352,49 @@ export function SpotBottomSheet({
                       Failed to load. Tap to retry
                     </Text>
                   </Pressable>
+                ) : photos.length === 0 ? (
+                  <View style={styles.noPhotosContainer}>
+                    <Ionicons name="images-outline" size={32} color={THEME.TEXT_MUTED} />
+                    <Text style={styles.noPhotosText}>No photos yet</Text>
+                  </View>
                 ) : (
                   <>
+                    {photoErrors > 0 && (
+                      <View style={styles.photoErrorBanner}>
+                        <Text style={styles.photoErrorText}>
+                          Some photos failed to load
+                        </Text>
+                        <Pressable onPress={handleLoadPhotos}>
+                          <Text style={styles.photoRetryLink}>Retry</Text>
+                        </Pressable>
+                      </View>
+                    )}
                     <ScrollView
                       horizontal
                       showsHorizontalScrollIndicator={false}
                       contentContainerStyle={styles.photoThumbnails}
                     >
-                      {photos.slice(0, 6).map((photo) => (
-                        <Image
-                          key={photo.id}
-                          source={{ uri: photo.variants.url_l }}
-                          style={styles.photoThumbnail}
-                        />
-                      ))}
+                      {photos.slice(0, 10).map((photo) => {
+                        const imageUrl = getPreferredPhotoUrl(photo.variants);
+                        if (!imageUrl) return null;
+                        return (
+                          <Image
+                            key={photo.id}
+                            source={{ uri: imageUrl }}
+                            style={styles.photoThumbnail}
+                            onError={(e) => console.warn('[SpotBottomSheet] Photo thumbnail failed:', photo.id, e.nativeEvent.error)}
+                          />
+                        );
+                      })}
                     </ScrollView>
-                    {photos.length > 6 && (
-                      <Pressable
-                        style={styles.seeAllButton}
-                        onPress={handleViewPhotos}
-                      >
-                        <Text style={styles.seeAllText}>
-                          See all photos ({photos.length})
-                        </Text>
-                      </Pressable>
-                    )}
+                    <Pressable
+                      style={styles.seeAllButton}
+                      onPress={handleViewPhotos}
+                    >
+                      <Text style={styles.seeAllText}>
+                        See all photos {photos.length > 10 ? `(${photos.length})` : ''}
+                      </Text>
+                    </Pressable>
                   </>
                 )}
               </View>
@@ -471,6 +559,26 @@ const styles = StyleSheet.create({
   photosLoader: {
     paddingVertical: 12,
   },
+  photoErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#FEF3C7',
+    borderRadius: 6,
+  },
+  photoErrorText: {
+    fontSize: 12,
+    color: '#92400E',
+  },
+  photoRetryLink: {
+    fontSize: 12,
+    color: THEME.ACCENT,
+    fontWeight: '600',
+  },
   photoThumbnails: {
     gap: 8,
   },
@@ -488,5 +596,29 @@ const styles = StyleSheet.create({
     color: THEME.ACCENT,
     fontSize: 14,
     fontWeight: '500',
+  },
+  placeholderImage: {
+    backgroundColor: THEME.BORDER,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  placeholderHero: {
+    backgroundColor: THEME.BORDER,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  placeholderText: {
+    color: THEME.TEXT_MUTED,
+    fontSize: 14,
+  },
+  noPhotosContainer: {
+    paddingVertical: 24,
+    alignItems: 'center',
+    gap: 8,
+  },
+  noPhotosText: {
+    color: THEME.TEXT_MUTED,
+    fontSize: 14,
   },
 });

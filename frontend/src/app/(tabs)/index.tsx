@@ -2,16 +2,17 @@ import BottomSheet from '@gorhom/bottom-sheet';
 import Mapbox from '@rnmapbox/maps';
 import * as Location from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
+import { NearbyLandmarksPanel } from '../../components/Map/NearbyLandmarksPanel';
 import { SearchPill } from '../../components/Map/SearchPill';
 import { SearchThisAreaPill } from '../../components/Map/SearchThisAreaPill';
 import { SpotLayers, type SpotLayersRef } from '../../components/Map/SpotLayers';
 import { SpotBottomSheet } from '../../components/Spot/SpotBottomSheet';
 import { THEME } from '../../constants/theme';
-import { getNearbySpots } from '../../lib/api';
+import { filterLandmarks, getNearbySpots } from '../../lib/api';
 import { distanceFromCoordinates } from '../../lib/geo';
 import {
   getHasFetchedOnce,
@@ -34,7 +35,7 @@ Mapbox.setAccessToken(
 // Toronto fallback
 const TORONTO_COORDS: [number, number] = [-79.3832, 43.6532];
 const DEFAULT_ZOOM = 13;
-const SEARCH_RADIUS_METERS = 1500;
+const SEARCH_RADIUS_METERS = 2500; // 2.5km radius for landmark-first experience
 const DISTANCE_THRESHOLD_METERS = 400;
 const ZOOM_THRESHOLD = 1.0;
 
@@ -67,14 +68,17 @@ export default function MapScreen() {
   // UI state
   const [showSearchPill, setShowSearchPill] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
-  const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // Fetch nearby spots
+  // Filter spots to landmarks only for display
+  const landmarks = useMemo(() => filterLandmarks(spots), [spots]);
+
+  // Fetch nearby spots (landmarks only)
   const performFetch = useCallback(
     async (center: [number, number], zoom: number) => {
       setIsSearching(true);
-      setErrorBanner(null);
+      setFetchError(null);
 
       try {
         const data = await getNearbySpots(center[1], center[0], SEARCH_RADIUS_METERS);
@@ -88,7 +92,7 @@ export default function MapScreen() {
         await setLastFetchedCenter(center);
       } catch (error) {
         console.error('Fetch failed:', error);
-        setErrorBanner("Couldn't load spots. Try again.");
+        setFetchError("Couldn't load landmarks. Try again.");
       } finally {
         setIsSearching(false);
       }
@@ -114,20 +118,11 @@ export default function MapScreen() {
             setUserCoordinates(TORONTO_COORDS);
           }
         } else {
-
           // Get current location with timeout
           try {
-            const location = await Promise.race([
-              Location.getCurrentPositionAsync({
-                accuracy: Location.Accuracy.Balanced,
-              }),
-              new Promise((_, reject) =>
-                setTimeout(
-                  () => reject(new Error('Location timeout')),
-                  5000
-                )
-              ),
-            ]);
+            const location = await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+            });
 
             if (mounted && location?.coords) {
               coords = [
@@ -267,35 +262,31 @@ export default function MapScreen() {
     bottomSheetRef.current?.snapToIndex(1);
   }, []);
 
-  // Handle cluster tap
-  const handleClusterTap = useCallback(
-    (coordinates: [number, number], expansionZoom: number) => {
-      if (isCameraAnimatingRef.current) return;
-
-      isCameraAnimatingRef.current = true;
-
-      cameraRef.current?.setCamera({
-        centerCoordinate: coordinates,
-        zoomLevel: Math.min(expansionZoom + 0.5, 20),
-        animationDuration: 600,
-      });
-
-      // Reset animation lock after animation completes
-      setTimeout(() => {
-        isCameraAnimatingRef.current = false;
-      }, 650);
-    },
-    []
-  );
+  // Handle landmark selection from panel
+  const handleLandmarkSelect = useCallback((landmark: Spot) => {
+    // Animate to the landmark
+    cameraRef.current?.setCamera({
+      centerCoordinate: [landmark.longitude, landmark.latitude],
+      zoomLevel: 15,
+      animationDuration: 600,
+    });
+    // Open the details sheet
+    setSelectedSpotId(landmark.id);
+    bottomSheetRef.current?.snapToIndex(1);
+  }, []);
 
   // Handle bottom sheet close
   const handleBottomSheetClose = useCallback(() => {
     setSelectedSpotId(null);
   }, []);
 
+  // Handle retry fetch from panel
+  const handleRetryFetch = useCallback(() => {
+    performFetch(mapCenter, currentZoom);
+  }, [performFetch, mapCenter, currentZoom]);
+
   // Navigate to search screen
   const handleSearchPress = useCallback(() => {
-    // @ts-expect-error - route exists but types not regenerated
     router.push('/search');
   }, [router]);
 
@@ -320,29 +311,21 @@ export default function MapScreen() {
           }}
         />
 
-        {/* Spot markers */}
+        {/* Landmark markers (red pins) */}
         <SpotLayers
           ref={spotLayersRef}
-          spots={spots}
+          spots={landmarks}
           selectedSpotId={selectedSpotId}
           onSpotSelect={handleSpotSelect}
-          onClusterTap={handleClusterTap}
         />
       </Mapbox.MapView>
 
       {/* Location denied banner */}
-      {locationDenied && (
+      {locationDenied && !selectedSpotId && (
         <View style={styles.locationBanner}>
           <Text style={styles.locationBannerText}>
-            Using default location — enable location for nearby spots.
+            Using default location — enable location for nearby landmarks.
           </Text>
-        </View>
-      )}
-
-      {/* Error banner */}
-      {errorBanner && (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorBannerText}>{errorBanner}</Text>
         </View>
       )}
 
@@ -352,7 +335,7 @@ export default function MapScreen() {
       </View>
 
       {/* Search this area pill */}
-      {showSearchPill && (
+      {showSearchPill && !selectedSpotId && (
         <View style={styles.searchAreaContainer}>
           <SearchThisAreaPill
             onPress={handleSearchThisArea}
@@ -361,7 +344,18 @@ export default function MapScreen() {
         </View>
       )}
 
-      {/* Spot bottom sheet */}
+      {/* Nearby landmarks panel - shown when no spot is selected */}
+      {!selectedSpotId && (
+        <NearbyLandmarksPanel
+          landmarks={landmarks}
+          loading={isSearching}
+          error={fetchError}
+          onSelectLandmark={handleLandmarkSelect}
+          onRetry={handleRetryFetch}
+        />
+      )}
+
+      {/* Landmark details bottom sheet */}
       {selectedSpotId && (
         <SpotBottomSheet
           spotId={selectedSpotId}
@@ -400,21 +394,6 @@ const styles = StyleSheet.create({
   locationBannerText: {
     fontSize: 13,
     color: THEME.TEXT_MUTED,
-    textAlign: 'center',
-  },
-  errorBanner: {
-    position: 'absolute',
-    top: 100,
-    left: 16,
-    right: 16,
-    backgroundColor: '#FEE2E2',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  errorBannerText: {
-    fontSize: 13,
-    color: '#DC2626',
     textAlign: 'center',
   },
   topPillContainer: {
