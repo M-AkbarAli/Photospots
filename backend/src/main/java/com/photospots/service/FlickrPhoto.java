@@ -43,6 +43,9 @@ public class FlickrPhoto {
     
     private int views;
     
+    @JsonProperty("dateupload")
+    private long dateUpload;
+    
     @JsonProperty("width_l")
     private int widthL;
     
@@ -205,6 +208,14 @@ public class FlickrPhoto {
 
     public void setViews(int views) {
         this.views = views;
+    }
+
+    public long getDateUpload() {
+        return dateUpload;
+    }
+
+    public void setDateUpload(long dateUpload) {
+        this.dateUpload = dateUpload;
     }
 
     public int getWidthL() {

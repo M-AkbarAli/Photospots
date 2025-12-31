@@ -11,13 +11,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-import javax.swing.tree.RowMapper;
-
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.Point;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -152,7 +151,7 @@ public class SpotService {
         }
 
         String sql = "select * from api_spots_nearby(?, ?, ?, ?)";
-        List<SpotDto> spots = jdbcTemplate.query(sql, new SpotRowMapper(), lat, lng, radiusMeters, 200);
+        List<SpotDto> spots = jdbcTemplate.query(sql, new Object[]{lat, lng, radiusMeters, 200}, new SpotRowMapper());
         cacheService.set(cacheKey, spots, Duration.ofSeconds(appProperties.getCache().getNearbySeconds()));
         return spots;
     }
@@ -176,7 +175,7 @@ public class SpotService {
         }
 
         String sql = "select * from api_spots_search(?, ?, ?, ?)";
-        List<SpotDto> spots = jdbcTemplate.query(sql, new SpotRowMapper(), query, lat, lng, 50);
+        List<SpotDto> spots = jdbcTemplate.query(sql, new Object[]{query, lat, lng, 50}, new SpotRowMapper());
         cacheService.set(cacheKey, spots, Duration.ofSeconds(appProperties.getCache().getSearchSeconds()));
         return spots;
     }
@@ -199,7 +198,7 @@ public class SpotService {
         }
 
         String sql = "select id, spot_id, variants, created_at from photos where spot_id = ? and visibility = 'public' order by created_at desc";
-        List<PhotoDto> photos = jdbcTemplate.query(sql, new PhotoRowMapper(), spotId);
+        List<PhotoDto> photos = jdbcTemplate.query(sql, new Object[]{spotId}, new PhotoRowMapper());
         cacheService.set(cacheKey, photos, Duration.ofSeconds(appProperties.getCache().getPhotosSeconds()));
         return photos;
     }

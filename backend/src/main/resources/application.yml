@@ -2,9 +2,11 @@ spring:
   application:
     name: photospots-backend
   datasource:
-    url: jdbc:postgresql://localhost:5433/photospots
-    username: photospots
-    password: photospots
+    # Database connection - override with environment variables or .env file
+    # Default values are for local development with Docker Compose
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/photospots}
+    username: ${SPRING_DATASOURCE_USERNAME:photospots}
+    password: ${SPRING_DATASOURCE_PASSWORD:photospots}
   jpa:
     hibernate:
       ddl-auto: validate
@@ -14,8 +16,9 @@ spring:
     show-sql: false
   data:
     redis:
-      host: localhost
-      port: 6379
+      # Redis connection - override with environment variables
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
 
 aws:
   region: us-east-1

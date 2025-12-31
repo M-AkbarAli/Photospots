@@ -53,11 +53,22 @@ public class TargetLocation {
         this.latitude = latitude;
     }
 
+    // Backwards-compatible JSON aliases: seed/locations.json uses "lat"/"lng"
+    @JsonProperty("lat")
+    public void setLat(Double latitude) {
+        this.latitude = latitude;
+    }
+
     public Double getLongitude() {
         return longitude;
     }
 
     public void setLongitude(Double longitude) {
+        this.longitude = longitude;
+    }
+
+    @JsonProperty("lng")
+    public void setLng(Double longitude) {
         this.longitude = longitude;
     }
 

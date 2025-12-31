@@ -31,7 +31,23 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
 .env*.local
+.env.production
+.env.development
+
+# Backend
+backend/target/
+backend/.env
+backend/*.log
+backend/seed*.log
+backend/seed*.txt
+
+# Frontend
+frontend/.env
+frontend/.env*.local
+frontend/android/gradle.properties.local
+frontend/ios/.xcode.env.local
 
 # typescript
 *.tsbuildinfo
@@ -39,3 +55,14 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
