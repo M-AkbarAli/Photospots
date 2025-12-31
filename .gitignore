@@ -47,7 +47,11 @@ backend/seed*.txt
 frontend/.env
 frontend/.env*.local
 frontend/android/gradle.properties.local
+frontend/ios/.xcode.env
 frontend/ios/.xcode.env.local
+
+# Backend additional paths
+backend/src/main/.env
 
 # typescript
 *.tsbuildinfo
