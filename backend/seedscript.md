@@ -1,3 +1,12 @@
+java -jar target/photospots-backend-0.0.1-SNAPSHOT.jar --seed
+
+java -jar target/photospots-backend-0.0.1-SNAPSHOT.jar --seed --seed-reset
+
+
+
+
+
+
 Plan for Flickr-Based Photo Spot Seed Script
 Introduction and Goals
 
@@ -319,3 +328,5 @@ By following these steps, the seed script will populate the app’s database wit
 Conclusion
 
 In summary, the seed script uses the Flickr API to gather relevant and high-quality images for each point of interest, while carefully removing duplicates and filtering out poor content. We prioritized relevance (so each photo truly represents the location) and then boosted quality by incorporating Flickr’s interestingness and group pools. By respecting API limits and using efficient queries, the script will run safely and populate our app’s database with the necessary data. The end result will be an app experience where users can discover great photo spots near them, view a variety of example photos for inspiration, and get directions to stand exactly where those photos were taken. This level of detail and curation will set our app apart from generic map image searches and should greatly enhance user satisfaction.
+
+
