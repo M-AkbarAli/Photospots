@@ -15,8 +15,14 @@
     },
     "ios": {
       "supportsTablet": true,
+      "buildNumber": "1",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "This app uses location to show you nearby photogenic spots on the map."
+        "NSLocationWhenInUseUsageDescription": "Photospots uses your location to show you nearby photogenic spots and landmarks on the map.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Photospots uses your location to show you nearby photogenic spots and landmarks on the map.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "config": {
+        "usesNonExemptEncryption": false
       },
       "bundleIdentifier": "com.anonymous.Photospots"
     },
