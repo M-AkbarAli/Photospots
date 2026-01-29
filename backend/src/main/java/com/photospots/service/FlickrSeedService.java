@@ -311,10 +311,13 @@ public class FlickrSeedService {
 
         private static final String VISION_SCRIPT = Paths.get("tools", "photo_filter", "filter_photos.py").toString();
 
+        /** Tags that suggest crowd/event content; we down-rank these in diversity so photogenic shots are preferred. */
+		private static final Set<String> CROWD_EVENT_TAGS = Set.of("people", "crowd", "festival", "event", "parade");
         // Place ID cache (rounded to 2 decimals)
         private final Map<String, String> placeIdCache = new HashMap<>();
         private final RestTemplate restTemplate;
-        private final JdbcTemplate jdbcTemplate;
+
+    private final JdbcTemplate jdbcTemplate;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -735,63 +738,11 @@ public class FlickrSeedService {
         }
     }
 
-    private List<FlickrPhoto> searchPhotosGeoWithTags(String apiKey, TargetLocation location, String sortOrder, String tags) {
-        try {
-            StringBuilder url = new StringBuilder(FLICKR_API_BASE);
-            url.append("?method=flickr.photos.search");
-            url.append("&api_key=").append(apiKey);
-            url.append("&sort=").append(sortOrder);
-            url.append("&per_page=").append(PER_PAGE);
-            url.append("&page=1");
-            url.append("&extras=").append(EXTRAS);
-            url.append("&has_geo=1");
-            url.append("&safe_search=1");
-            url.append("&content_type=1");
-            url.append("&format=json");
-            url.append("&nojsoncallback=1");
-
-            if (StringUtils.hasText(tags)) {
-                url.append("&tags=").append(URLEncoder.encode(tags, StandardCharsets.UTF_8));
-                url.append("&tag_mode=any");
-            }
-
-            if (location.hasCoordinates()) {
-                url.append("&lat=").append(location.getLatitude());
-                url.append("&lon=").append(location.getLongitude());
-                url.append("&radius=").append(location.getRadiusKm());
-                url.append("&radius_units=km");
-                url.append("&accuracy=11");
-            } else {
-                url.append("&bbox=").append(GTA_MIN_LNG).append(",").append(GTA_MIN_LAT).append(",").append(GTA_MAX_LNG).append(",").append(GTA_MAX_LAT);
-            }
-
-            FlickrResponse response = restTemplate.getForObject(url.toString(), FlickrResponse.class);
-            if (response == null || !"ok".equals(response.getStat())) {
-                System.err.println("         ⚠️ Flickr API error for tagged geo search sort=" + sortOrder);
-                return new ArrayList<>();
-            }
-            if (response.getPhotos() == null || response.getPhotos().getPhoto() == null || response.getPhotos().getPhoto().isEmpty()) {
-                if (location.hasCoordinates()) {
-                    System.out.println("         ⚠️ Flickr returned 0 photos for tagged geo query sort=" + sortOrder +
-                            " lat=" + location.getLatitude() + " lon=" + location.getLongitude() + " radius=" + location.getRadiusKm());
-                } else {
-                    System.out.println("         ⚠️ Flickr returned 0 photos for tagged geo query sort=" + sortOrder +
-                            " bbox=" + GTA_MIN_LNG + "," + GTA_MIN_LAT + "," + GTA_MAX_LNG + "," + GTA_MAX_LAT);
-                }
-            }
-            return response.getPhotos() != null ? response.getPhotos().getPhoto() : new ArrayList<>();
-        } catch (Exception e) {
-            System.err.println("         ❌ Error searching tagged geo: " + e.getMessage());
-            return new ArrayList<>();
-        }
-    }
-
-        private List<FlickrPhoto> searchPhotos(String apiKey, TargetLocation location, String sortOrder) {
+        private List<FlickrPhoto> searchPhotosGeoWithTags(String apiKey, TargetLocation location, String sortOrder, String tags) {
 		    try {
 		        StringBuilder url = new StringBuilder(FLICKR_API_BASE);
 		        url.append("?method=flickr.photos.search");
 		        url.append("&api_key=").append(apiKey);
-		        url.append("&text=").append(URLEncoder.encode(buildLocalText(location), StandardCharsets.UTF_8));
 		        url.append("&sort=").append(sortOrder);
 		        url.append("&per_page=").append(PER_PAGE);
 		        url.append("&page=1");
@@ -801,6 +752,11 @@ public class FlickrSeedService {
 		        url.append("&content_type=1");
 		        url.append("&format=json");
 		        url.append("&nojsoncallback=1");
+
+		        if (StringUtils.hasText(tags)) {
+		            url.append("&tags=").append(URLEncoder.encode(tags, StandardCharsets.UTF_8));
+		            url.append("&tag_mode=any");
+		        }
 
 		        if (location.hasCoordinates()) {
 		            url.append("&lat=").append(location.getLatitude());
@@ -814,19 +770,66 @@ public class FlickrSeedService {
 
 		        FlickrResponse response = restTemplate.getForObject(url.toString(), FlickrResponse.class);
 		        if (response == null || !"ok".equals(response.getStat())) {
-		            System.err.println("         ⚠️ Flickr API error for " + location.getName());
+		            System.err.println("         ⚠️ Flickr API error for tagged geo search sort=" + sortOrder);
 		            return new ArrayList<>();
 		        }
 		        if (response.getPhotos() == null || response.getPhotos().getPhoto() == null || response.getPhotos().getPhoto().isEmpty()) {
-		            System.out.println("         ⚠️ Flickr returned 0 photos for text='" + buildLocalText(location) + "' sort=" + sortOrder +
-		                    (location.hasCoordinates() ? " lat=" + location.getLatitude() + " lon=" + location.getLongitude() + " radius=" + location.getRadiusKm() : " bbox=" + GTA_MIN_LNG + "," + GTA_MIN_LAT + "," + GTA_MAX_LNG + "," + GTA_MAX_LAT));
+		            if (location.hasCoordinates()) {
+		                System.out.println("         ⚠️ Flickr returned 0 photos for tagged geo query sort=" + sortOrder +
+		                        " lat=" + location.getLatitude() + " lon=" + location.getLongitude() + " radius=" + location.getRadiusKm());
+		            } else {
+		                System.out.println("         ⚠️ Flickr returned 0 photos for tagged geo query sort=" + sortOrder +
+		                        " bbox=" + GTA_MIN_LNG + "," + GTA_MIN_LAT + "," + GTA_MAX_LNG + "," + GTA_MAX_LAT);
+		            }
 		        }
 		        return response.getPhotos() != null ? response.getPhotos().getPhoto() : new ArrayList<>();
 		    } catch (Exception e) {
-		        System.err.println("         ❌ Error searching: " + e.getMessage());
+		        System.err.println("         ❌ Error searching tagged geo: " + e.getMessage());
 		        return new ArrayList<>();
 		    }
 		}
+    private List<FlickrPhoto> searchPhotos(String apiKey, TargetLocation location, String sortOrder) {
+	    try {
+	        StringBuilder url = new StringBuilder(FLICKR_API_BASE);
+	        url.append("?method=flickr.photos.search");
+	        url.append("&api_key=").append(apiKey);
+	        url.append("&text=").append(URLEncoder.encode(buildLocalText(location), StandardCharsets.UTF_8));
+	        url.append("&sort=").append(sortOrder);
+	        url.append("&per_page=").append(PER_PAGE);
+	        url.append("&page=1");
+	        url.append("&extras=").append(EXTRAS);
+	        url.append("&has_geo=1");
+	        url.append("&safe_search=1");
+	        url.append("&content_type=1");
+	        url.append("&format=json");
+	        url.append("&nojsoncallback=1");
+
+	        if (location.hasCoordinates()) {
+	            url.append("&lat=").append(location.getLatitude());
+	            url.append("&lon=").append(location.getLongitude());
+	            url.append("&radius=").append(location.getRadiusKm());
+	            url.append("&radius_units=km");
+	            url.append("&accuracy=11");
+	        } else {
+	            url.append("&bbox=").append(GTA_MIN_LNG).append(",").append(GTA_MIN_LAT).append(",").append(GTA_MAX_LNG).append(",").append(GTA_MAX_LAT);
+	        }
+
+	        FlickrResponse response = restTemplate.getForObject(url.toString(), FlickrResponse.class);
+	        if (response == null || !"ok".equals(response.getStat())) {
+	            System.err.println("         ⚠️ Flickr API error for " + location.getName());
+	            return new ArrayList<>();
+	        }
+	        if (response.getPhotos() == null || response.getPhotos().getPhoto() == null || response.getPhotos().getPhoto().isEmpty()) {
+	            System.out.println("         ⚠️ Flickr returned 0 photos for text='" + buildLocalText(location) + "' sort=" + sortOrder +
+	                    (location.hasCoordinates() ? " lat=" + location.getLatitude() + " lon=" + location.getLongitude() + " radius=" + location.getRadiusKm() : " bbox=" + GTA_MIN_LNG + "," + GTA_MIN_LAT + "," + GTA_MAX_LNG + "," + GTA_MAX_LAT));
+	        }
+	        return response.getPhotos() != null ? response.getPhotos().getPhoto() : new ArrayList<>();
+	    } catch (Exception e) {
+	        System.err.println("         ❌ Error searching: " + e.getMessage());
+	        return new ArrayList<>();
+	    }
+	}
+
     private List<FlickrPhoto> searchGroup(String apiKey, TargetLocation location, String groupId) {
 	    try {
 	        StringBuilder url = new StringBuilder(FLICKR_API_BASE);
@@ -2008,6 +2011,8 @@ public class FlickrSeedService {
         return kept;
     }
 
+    // ==================== GEO-FIRST DISCOVERY HELPERS ====================
+
     private void logDistanceStats(TargetLocation location, List<FlickrPhoto> gtaKept) {
         if (!location.hasCoordinates() || gtaKept.isEmpty()) {
             return;
@@ -2030,8 +2035,6 @@ public class FlickrSeedService {
                     "; <=1km:" + within1000 + "; <=2km:" + within2000);
         }
     }
-
-    // ==================== GEO-FIRST DISCOVERY HELPERS ====================
 
     private void logStrategy(String label, FetchCounters counters, int keptAfterClamp, int uniqueAdded, int dupes) {
         System.out.println(String.format("         [%s] fetched:%d geo-kept:%d gta-kept:%d radius-kept:%d kept:%d unique-added:%d dupes:%d",
@@ -2139,6 +2142,8 @@ public class FlickrSeedService {
         }
     }
 
+    // ==================== PLACE ID SCOPING ====================
+
     /**
      * Search with text= and optional place_id scoping.
      */
@@ -2184,7 +2189,7 @@ public class FlickrSeedService {
         }
     }
 
-    // ==================== PLACE ID SCOPING ====================
+    // ==================== TIME WINDOW LADDER ====================
 
     /**
      * Search group with optional place_id scoping.
@@ -2229,8 +2234,6 @@ public class FlickrSeedService {
             return new ArrayList<>();
         }
     }
-
-    // ==================== TIME WINDOW LADDER ====================
 
     /**
      * Resolves Flickr place_id for given lat/lon. Returns null if outside GTA or API error.
@@ -2333,6 +2336,8 @@ public class FlickrSeedService {
         return new GeoSearchResult(new ArrayList<>(), "FALLBACK");
     }
 
+    // ==================== TAG BUCKET SELECTION ====================
+
     /**
      * Runs geo tag bucket search with time window ladder.
      */
@@ -2352,11 +2357,6 @@ public class FlickrSeedService {
         
         return new GeoSearchResult(new ArrayList<>(), "FALLBACK");
     }
-
-    // ==================== TAG BUCKET SELECTION ====================
-
-    /** Tags that suggest crowd/event content; we down-rank these in diversity so photogenic shots are preferred. */
-    private static final Set<String> CROWD_EVENT_TAGS = Set.of("people", "crowd", "festival", "event", "parade");
 
     /**
      * Select up to 2 buckets for landmark based on name keywords and density.
