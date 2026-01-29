@@ -10,7 +10,7 @@ import { MapMarkers } from '../../components/Map/MapMarkers';
 import { SearchPill } from '../../components/Map/SearchPill';
 import { SearchThisAreaPill } from '../../components/Map/SearchThisAreaPill';
 import { useTheme } from '../../constants/theme';
-import { filterLandmarks, getNearbySpots } from '../../lib/api';
+import { getNearbySpots } from '../../lib/api';
 import { distanceFromCoordinates } from '../../lib/geo';
 import {
   getHasFetchedOnce,
@@ -82,18 +82,28 @@ export default function MapScreen() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // Filter spots to landmarks only and sort by proximity to the user's location (fallback to last fetch center)
-  const landmarks = useMemo(() => {
-    const base = filterLandmarks(spots);
+  // Separate landmarks (named) from photospots (nameless niche discoveries)
+  const { landmarks, photospots } = useMemo(() => {
     const origin = userCoordinates || lastFetchedCenter || TORONTO_COORDS;
-
-    if (!origin) return base;
-
-    return [...base].sort((a, b) => {
-      const distA = distanceFromCoordinates([a.longitude, a.latitude], origin);
-      const distB = distanceFromCoordinates([b.longitude, b.latitude], origin);
-      return distA - distB;
-    });
+    
+    // Split spots by type
+    const landmarkSpots = spots.filter(s => s.categories?.includes('landmark'));
+    const photospotSpots = spots.filter(s => s.categories?.includes('photospot'));
+    
+    // Sort by distance
+    const sortByDistance = (arr: typeof spots) => {
+      if (!origin) return arr;
+      return [...arr].sort((a, b) => {
+        const distA = distanceFromCoordinates([a.longitude, a.latitude], origin);
+        const distB = distanceFromCoordinates([b.longitude, b.latitude], origin);
+        return distA - distB;
+      });
+    };
+    
+    return {
+      landmarks: sortByDistance(landmarkSpots),
+      photospots: sortByDistance(photospotSpots),
+    };
   }, [spots, userCoordinates, lastFetchedCenter]);
 
   // Fetch nearby spots (landmarks only)
@@ -337,9 +347,10 @@ export default function MapScreen() {
           }}
         />
 
-        {/* Landmark markers (image-only squares with white border) */}
+        {/* Landmark markers (image + label) and Photospots (image only) */}
         <MapMarkers
           landmarks={landmarks}
+          photospots={photospots}
           selectedSpotId={selectedSpotId}
           userLocation={userCoordinates}
           onMarkerPress={handleMarkerPress}

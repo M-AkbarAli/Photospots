@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { CategoryChips } from '../components/Spot/CategoryChips';
 import { useTheme } from '../constants/theme';
-import { filterLandmarks, searchSpots } from '../lib/api';
+import { searchSpots } from '../lib/api';
 import type { Spot } from '../types/api';
 
 export default function SearchScreen() {
@@ -36,8 +36,8 @@ export default function SearchScreen() {
 
     try {
       const spots = await searchSpots(query.trim());
-      // Filter to only show landmarks
-      const landmarks = filterLandmarks(spots);
+      // Search only shows landmarks (named spots) - photospots have no names to search
+      const landmarks = spots.filter(s => s.categories?.includes('landmark'));
       setResults(landmarks);
     } catch (err) {
       console.error('Search failed:', err);

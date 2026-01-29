@@ -7,5 +7,41 @@
     "radiusKm": 4.0,
     "tileSpacingMeters": 900,
     "tileRadiusKm": 1.2
+  },
+  {
+    "key": "downtown",
+    "name": "Downtown Toronto Core",
+    "lat": 43.6534,
+    "lng": -79.3839,
+    "radiusKm": 2.5,
+    "tileSpacingMeters": 600,
+    "tileRadiusKm": 0.8
+  },
+  {
+    "key": "east-end",
+    "name": "Toronto East End",
+    "lat": 43.6685,
+    "lng": -79.3200,
+    "radiusKm": 2.0,
+    "tileSpacingMeters": 700,
+    "tileRadiusKm": 0.9
+  },
+  {
+    "key": "west-end",
+    "name": "Toronto West End",
+    "lat": 43.6465,
+    "lng": -79.4400,
+    "radiusKm": 2.0,
+    "tileSpacingMeters": 700,
+    "tileRadiusKm": 0.9
+  },
+  {
+    "key": "waterfront",
+    "name": "Toronto Waterfront",
+    "lat": 43.6389,
+    "lng": -79.3814,
+    "radiusKm": 3.0,
+    "tileSpacingMeters": 800,
+    "tileRadiusKm": 1.0
   }
 ]

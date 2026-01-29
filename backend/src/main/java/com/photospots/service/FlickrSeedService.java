@@ -289,9 +289,20 @@ public class FlickrSeedService {
             private static final String[] EXCLUDE_TOKENS = new String[]{
                 "selfie", "portrait", "headshot", "model", "fashion", "wedding", "engagement",
                 "bird", "birds", "wildlife", "owl", "hawk", "eagle", "duck", "goose", "dog", "puppy", "cat", "kitten",
-                "food", "meal", "dinner", "lunch", "coffee"
+                "food", "meal", "dinner", "lunch", "coffee",
+                "protest", "rally", "march", "demonstration", "crowd", "police", "riot", "election", "campaign",
+                "flag", "banner", "placard", "chant",
+                "festival", "event", "parade", "people"
             };
         private static final Set<String> SUSPECT_TOKENS = Set.of(EXCLUDE_TOKENS);
+        private static final Set<String> EVENT_TOKENS = Set.of(
+                "protest", "rally", "march", "demonstration", "crowd", "police", "riot", "election", "campaign",
+                "flag", "banner", "placard", "chant", "festival", "event", "parade", "people"
+        );
+        /** Meters beyond which a photo must have at least one location token (title/tags) to be kept. */
+        private static final double MAX_DISTANCE_METERS_NO_TOKEN = 400.0;
+        /** Event/crowd photos are only allowed if very close and strongly tagged to the landmark. */
+        private static final double MAX_EVENT_DISTANCE_METERS = 200.0;
         private static final Set<String> BASE_LOCATION_TOKENS = Set.of("toronto", "ontario", "canada");
         private static final int CANDIDATES_PER_HOTSPOT = 120;
         private static final int BLUR_THRESHOLD = 60;
@@ -338,11 +349,12 @@ public class FlickrSeedService {
             System.out.println("         This may produce incorrect landmark centers. Check JSON deserialization.");
         }
 
-        double baseRadius = Math.max(location.getRadiusKm(), 2.0);
+        // Respect each landmark's configured radius; expand only if results are empty (max 2km cap).
+        double r = location.getRadiusKm();
         double[] radiusAttempts = new double[]{
-            baseRadius,
-            Math.max(baseRadius, 5.0),
-            Math.max(baseRadius, 10.0)
+            r,                                    // Attempt 1: location.radiusKm (e.g. 0.4 for Distillery)
+            Math.max(r * 2, 0.6),                 // Attempt 2: 2x or at least 0.6km
+            Math.min(r * 4, 2.0)                  // Attempt 3: 4x but cap at 2.0km; stop there
         };
 
         Set<String> seenPhotoIds = new HashSet<>();
@@ -412,8 +424,10 @@ public class FlickrSeedService {
             }
 
             // ==================== GEO-FIRST DISCOVERY (no text) ====================
-            // Only run if we have room under 6 calls total
-            if (callCount < 6) {
+            // For dense downtown (small radius), skip raw geo-interestingness to avoid event/crowd collateral.
+            // Use only name-first + bucket (STREET_ART, NIGHT_VIBE, etc.) for these landmarks.
+            boolean skipRawGeoInteresting = location.getRadiusKm() <= 0.5;
+            if (callCount < 6 && !skipRawGeoInteresting) {
                 System.out.println("      🌍 [GEO-FIRST] Interestingness search (no text, time-window ladder)...");
                 GeoSearchResult geoInteresting = runGeoInterestingnessWithTimeLadder(apiKey, attemptLocation, counters);
                 int geoIntCount = addUniquePhotos(geoInteresting.photos, allPhotos, seenPhotoIds);
@@ -421,6 +435,8 @@ public class FlickrSeedService {
                 logStrategy("geo-interesting[" + geoInteresting.timeWindow + "]", counters, geoInteresting.photos.size(), geoIntCount, geoInteresting.photos.size() - geoIntCount);
                 rateLimitDelay();
                 callCount++;
+            } else if (skipRawGeoInteresting && callCount < 6) {
+                System.out.println("      🌍 [GEO-FIRST] Skipping raw geo-interesting (dense downtown radius " + location.getRadiusKm() + "km); using buckets only.");
             }
 
             // Run up to MAX_BUCKETS_PER_ATTEMPT bucket searches if we have room
@@ -615,38 +631,62 @@ public class FlickrSeedService {
         diversePhotos = ensureTagVariety(diversePhotos, 20);
         System.out.println("      After diversity pruning: " + diversePhotos.size() + " photos (from " + allFiltered.size() + ")");
 
-        String coverUrl = chooseDisplayUrl(diversePhotos.get(0));
-        UUID areaLandmarkId = upsertAreaLandmark(area, coverUrl, diversePhotos.size());
-        int landmarkUpserts = areaLandmarkId != null ? 1 : 0;
+        // Cluster photos into individual photo spots (nameless niche discoveries)
+        System.out.println("   📍 Clustering photos into photo spots...");
+        Map<String, List<FlickrPhoto>> clusters = clusterAreaPhotos(diversePhotos);
+        System.out.println("      Found " + clusters.size() + " photo spot clusters (min " + 
+                           (diversePhotos.size() < 150 ? 2 : MIN_PHOTOS_PER_HOTSPOT) + " photos per cluster)");
 
-        if (areaLandmarkId == null) {
-            System.out.println("   ⚠️ Failed to upsert area landmark");
-            return new SeedResult(area.getName(), totalFetched, 0, 0, 0, 0, totalMissingGeo, totalMissingUrl, duplicateCount, 0, 0, 0);
+        int photospotUpserts = 0;
+        int totalInserted = 0;
+        int totalAttempted = 0;
+        int totalConflicts = 0;
+        int totalFailed = 0;
+        int totalPortraitRejected = 0;
+        int totalBlurryRejected = 0;
+
+        if (clusters.isEmpty()) {
+            System.out.println("      ⚠️  No clusters formed (photos too dispersed or insufficient per location)");
+        } else {
+            // Create nameless photo spots and insert photos for each cluster
+            Map<String, UUID> photospotIds = upsertPhotoSpots(area, clusters);
+            photospotUpserts = photospotIds.size();
+            System.out.println("      ✅ Created " + photospotUpserts + " photo spots");
+
+            int clusterIdx = 0;
+            for (Map.Entry<String, UUID> entry : photospotIds.entrySet()) {
+                clusterIdx++;
+                String clusterKey = entry.getKey();
+                UUID photospotId = entry.getValue();
+                List<FlickrPhoto> clusterPhotos = clusters.get(clusterKey);
+
+                // Apply vision filtering to cluster photos
+                VisionOutcome clusterVision = applyVisionFilteringToList(clusterPhotos, visionEnabled);
+                InsertStats clusterStats = insertPhotosForLandmark(photospotId, clusterVision.filteredPhotos, clusterVision.qaByPhotoKey);
+
+                totalInserted += clusterStats.inserted;
+                totalAttempted += clusterStats.attempted;
+                totalConflicts += clusterStats.conflicts;
+                totalFailed += clusterStats.failed;
+                totalPortraitRejected += clusterVision.portraitRejected;
+                totalBlurryRejected += clusterVision.blurryRejected;
+
+                System.out.println("         Photo spot " + clusterIdx + "/" + photospotUpserts + ": " + 
+                                   clusterStats.inserted + " photos inserted (from " + clusterPhotos.size() + " candidates)");
+            }
         }
 
-        // Apply vision filtering to all photos
-        VisionOutcome visionOutcome = applyVisionFilteringToList(diversePhotos, visionEnabled);
+        System.out.println("   📈 Area summary — total clusters:" + clusters.size() +
+            " photo spots created:" + photospotUpserts);
+        System.out.println("   🧠 Vision rejections — portraits: " + totalPortraitRejected + ", blurry: " + totalBlurryRejected);
+        System.out.println("   ✅ Area complete — " +
+                " attempted:" + totalAttempted +
+                " inserted:" + totalInserted +
+                " conflict-skipped:" + totalConflicts +
+                " failed:" + totalFailed);
 
-        InsertStats insertStats = insertPhotosForLandmark(areaLandmarkId, visionOutcome.filteredPhotos, visionOutcome.qaByPhotoKey);
-
-        int uniqueCandidates = diversePhotos.size();
-        int newCandidates = insertStats.inserted;
-
-        System.out.println("   📈 Area candidates — unique collected:" + uniqueCandidates +
-            " new (not-in-DB):" + newCandidates);
-        System.out.println("   🧠 Vision rejections — portraits: " + visionOutcome.portraitRejected + ", blurry: " + visionOutcome.blurryRejected);
-        if (newCandidates == 0) {
-            System.out.println("   ℹ️  Area already populated; no new photos available under current search settings.");
-        }
-
-        System.out.println("   ✅ Area upsert complete — " +
-                " attempted:" + insertStats.attempted +
-                " inserted:" + insertStats.inserted +
-                " conflict-skipped:" + insertStats.conflicts +
-                " failed:" + insertStats.failed);
-
-        return new SeedResult(area.getName(), totalFetched, diversePhotos.size(), insertStats.inserted, landmarkUpserts,
-                0, totalMissingGeo, totalMissingUrl, duplicateCount, insertStats.conflicts, insertStats.failed, insertStats.attempted);
+        return new SeedResult(area.getName(), totalFetched, diversePhotos.size(), totalInserted, 0,
+                photospotUpserts, totalMissingGeo, totalMissingUrl, duplicateCount, totalConflicts, totalFailed, totalAttempted);
     }
 
     private List<FlickrPhoto> searchPhotosGeo(String apiKey, TargetLocation location, String sortOrder) {
@@ -841,7 +881,7 @@ public class FlickrSeedService {
         int missingUrl = 0;
         int suspectRejects = 0;
 
-        Set<String> locationTokens = buildLocationTokens(location);
+        Set<String> strongLocationTokens = buildStrongLocationTokens(location);
 
         for (FlickrPhoto photo : photos) {
             if (!photo.hasValidGeo()) {
@@ -857,9 +897,36 @@ public class FlickrSeedService {
                 missingUrl++;
                 continue;
             }
-            if (isSuspectSubject(photo, locationTokens)) {
+            Set<String> photoTokens = new HashSet<>();
+            photoTokens.addAll(tokenize(photo.getTitle()));
+            photoTokens.addAll(tokenize(photo.getTags()));
+
+            if (isSuspectSubject(photoTokens, strongLocationTokens)) {
                 suspectRejects++;
                 continue;
+            }
+            // Distance-gated relevance: if photo is far from landmark, require at least one location token
+            if (location.hasCoordinates()) {
+                double distanceMeters = haversineMeters(
+                    location.getLatitude(), location.getLongitude(),
+                    photo.getLatitude(), photo.getLongitude());
+                if (distanceMeters > MAX_DISTANCE_METERS_NO_TOKEN) {
+                    boolean hasStrongLocationToken = photoTokens.stream().anyMatch(strongLocationTokens::contains);
+                    if (!hasStrongLocationToken) {
+                        suspectRejects++;
+                        continue;
+                    }
+                }
+                // Reject event/crowd photos unless they're very close and strongly tagged to the landmark.
+                boolean hasEventToken = photoTokens.stream().anyMatch(EVENT_TOKENS::contains);
+                if (hasEventToken) {
+                    boolean hasStrongLocationToken = photoTokens.stream().anyMatch(strongLocationTokens::contains);
+                    boolean isDenseDowntown = location.getRadiusKm() <= 0.5;
+                    if (!hasStrongLocationToken || distanceMeters > MAX_EVENT_DISTANCE_METERS || isDenseDowntown) {
+                        suspectRejects++;
+                        continue;
+                    }
+                }
             }
             filtered.add(photo);
         }
@@ -871,7 +938,8 @@ public class FlickrSeedService {
     private UpsertOutcome upsertLocationHierarchy(TargetLocation location, List<FlickrPhoto> qualityPhotos, boolean visionEnabled) {
         String placeSlug = slugify(location.getName());
         double[] center = determineCenter(location, qualityPhotos);
-        String coverUrl = chooseDisplayUrl(qualityPhotos.get(0));
+        FlickrPhoto coverPhoto = selectCoverPhoto(location, qualityPhotos);
+        String coverUrl = chooseDisplayUrl(coverPhoto != null ? coverPhoto : qualityPhotos.get(0));
 
         UUID landmarkId = upsertLandmark(location, placeSlug, center[0], center[1], coverUrl, qualityPhotos.size());
         int landmarkUpserts = landmarkId != null ? 1 : 0;
@@ -1017,6 +1085,46 @@ public class FlickrSeedService {
             }
         }
         return hotspotIds;
+    }
+
+    /**
+     * Create nameless photo spots for discovered niche locations.
+     * These spots have no name (null) and use category 'photospot' to differentiate
+     * them from named landmarks. The photo_url serves as the marker image.
+     */
+    private Map<String, UUID> upsertPhotoSpots(AreaConfig area, Map<String, List<FlickrPhoto>> clusters) {
+        Map<String, UUID> photospotIds = new HashMap<>();
+        for (Map.Entry<String, List<FlickrPhoto>> entry : clusters.entrySet()) {
+            String key = entry.getKey();
+            List<FlickrPhoto> clusterPhotos = entry.getValue();
+            double[] center = computeClusterCenter(clusterPhotos);
+            String photospotSlug = String.format("photospot:%s:%s", area.getKey(), key);
+
+            // Create spot with NULL name - this is intentional for niche discoveries
+            String sql = "INSERT INTO spots (name, lat, lng, geom, source, source_id, categories, description, photo_url) " +
+                    "VALUES (NULL, ?, ?, ST_SetSRID(ST_MakePoint(?, ?), 4326), 'flickr', ?, ARRAY['photospot'], ?, ?) " +
+                    "ON CONFLICT (source, source_id) DO UPDATE SET " +
+                    "lat = EXCLUDED.lat, lng = EXCLUDED.lng, geom = EXCLUDED.geom, " +
+                    "categories = EXCLUDED.categories, description = EXCLUDED.description, photo_url = EXCLUDED.photo_url " +
+                    "RETURNING id";
+
+            String coverUrl = chooseDisplayUrl(clusterPhotos.get(0));
+
+            List<UUID> ids = jdbcTemplate.query(sql,
+                    (rs, rowNum) -> (UUID) rs.getObject("id"),
+                    center[0],
+                    center[1],
+                    center[1],
+                    center[0],
+                    photospotSlug,
+                    clusterPhotos.size() + " photos",
+                    coverUrl);
+
+            if (!ids.isEmpty()) {
+                photospotIds.put(key, ids.get(0));
+            }
+        }
+        return photospotIds;
     }
 
     private VisionOutcome applyVisionFilteringToList(List<FlickrPhoto> photos, boolean visionEnabled) {
@@ -1316,12 +1424,13 @@ public class FlickrSeedService {
 
     private void backfillPhotoGeoForSpot(UUID spotId) {
         try {
+            // Use jsonb_exists() so JDBC does not treat PostgreSQL's ? operator as a bind placeholder
             String sql = "UPDATE photos SET " +
                 "lat = COALESCE(lat, (variants->>'latitude')::double precision), " +
                 "lng = COALESCE(lng, (variants->>'longitude')::double precision), " +
                 "geom = COALESCE(geom, ST_SetSRID(ST_MakePoint((variants->>'longitude')::double precision, (variants->>'latitude')::double precision), 4326)) " +
                 "WHERE spot_id = ? AND (lat IS NULL OR lng IS NULL OR geom IS NULL) " +
-                "AND variants ? 'latitude' AND variants ? 'longitude'";
+                "AND jsonb_exists(variants, 'latitude') AND jsonb_exists(variants, 'longitude')";
             int updated = jdbcTemplate.update(sql, spotId);
             if (updated > 0) {
                 System.out.println("      🧭 Backfilled geo columns for " + updated + " photos (spot_id=" + spotId + ")");
@@ -1650,6 +1759,12 @@ public class FlickrSeedService {
 
     private Set<String> buildLocationTokens(TargetLocation location) {
         Set<String> tokens = new HashSet<>(BASE_LOCATION_TOKENS);
+        tokens.addAll(buildStrongLocationTokens(location));
+        return tokens;
+    }
+
+    private Set<String> buildStrongLocationTokens(TargetLocation location) {
+        Set<String> tokens = new HashSet<>();
         tokens.addAll(tokenize(location.getName()));
         if (location.getAlternateNames() != null) {
             for (String alt : location.getAlternateNames()) {
@@ -1659,16 +1774,15 @@ public class FlickrSeedService {
         return tokens;
     }
 
-    private boolean isSuspectSubject(FlickrPhoto photo, Set<String> locationTokens) {
+    private boolean isSuspectSubject(Set<String> photoTokens, Set<String> strongLocationTokens) {
         Set<String> tokens = new HashSet<>();
-        tokens.addAll(tokenize(photo.getTitle()));
-        tokens.addAll(tokenize(photo.getTags()));
+        tokens.addAll(photoTokens);
         boolean hasSuspect = tokens.stream().anyMatch(SUSPECT_TOKENS::contains);
         if (!hasSuspect) {
             return false;
         }
-        boolean hasLocationToken = tokens.stream().anyMatch(locationTokens::contains);
-        return !hasLocationToken;
+        boolean hasStrongLocationToken = tokens.stream().anyMatch(strongLocationTokens::contains);
+        return !hasStrongLocationToken;
     }
 
     private Set<String> tokenize(String text) {
@@ -1683,6 +1797,72 @@ public class FlickrSeedService {
             }
         }
         return tokens;
+    }
+
+    private boolean hasAnyTag(FlickrPhoto photo, Set<String> tagSet) {
+        Set<String> t = new HashSet<>();
+        t.addAll(tokenize(photo.getTitle()));
+        t.addAll(tokenize(photo.getTags()));
+        return t.stream().anyMatch(tagSet::contains);
+    }
+
+    /** Approximate pixel count for preferred resolution ordering (larger preferred). */
+    private long effectivePixelCount(FlickrPhoto photo) {
+        if (photo.getWidthO() > 0 && photo.getHeightO() > 0) {
+            return (long) photo.getWidthO() * (long) photo.getHeightO();
+        }
+        if (photo.getWidthL() > 0 && photo.getHeightL() > 0) {
+            return (long) photo.getWidthL() * (long) photo.getHeightL();
+        }
+        return 0;
+    }
+
+    /**
+     * Pick a cover photo that represents the landmark (not a one-off event).
+     * Preference order:
+     * 1) Strong landmark token present AND no event/crowd tokens
+     * 2) Strong landmark token present (even if event/crowd)
+     * 3) Any photo (fallback)
+     * Within a tier, prefer closer distance, higher views, higher resolution.
+     */
+    private FlickrPhoto selectCoverPhoto(TargetLocation location, List<FlickrPhoto> photos) {
+        if (photos == null || photos.isEmpty()) {
+            return null;
+        }
+        Set<String> strongLocationTokens = buildStrongLocationTokens(location);
+
+        List<FlickrPhoto> tier1 = new ArrayList<>();
+        List<FlickrPhoto> tier2 = new ArrayList<>();
+        List<FlickrPhoto> tier3 = new ArrayList<>();
+
+        for (FlickrPhoto photo : photos) {
+            Set<String> tokens = new HashSet<>();
+            tokens.addAll(tokenize(photo.getTitle()));
+            tokens.addAll(tokenize(photo.getTags()));
+
+            boolean hasStrongLocationToken = tokens.stream().anyMatch(strongLocationTokens::contains);
+            boolean hasEventToken = tokens.stream().anyMatch(EVENT_TOKENS::contains);
+
+            if (hasStrongLocationToken && !hasEventToken) {
+                tier1.add(photo);
+            } else if (hasStrongLocationToken) {
+                tier2.add(photo);
+            } else {
+                tier3.add(photo);
+            }
+        }
+
+        List<FlickrPhoto> candidates = !tier1.isEmpty() ? tier1 : (!tier2.isEmpty() ? tier2 : tier3);
+        candidates.sort(Comparator
+                .comparingDouble((FlickrPhoto p) -> location.hasCoordinates()
+                        ? haversineMeters(location.getLatitude(), location.getLongitude(), p.getLatitude(), p.getLongitude())
+                        : 0.0)
+                .thenComparingInt(FlickrPhoto::getViews).reversed()
+                .thenComparingLong((FlickrPhoto p) -> effectivePixelCount(p)).reversed()
+                .thenComparingLong(FlickrPhoto::getDateUpload).reversed()
+                .thenComparing(FlickrPhoto::getId));
+
+        return candidates.get(0);
     }
 
     private double[] determineCenter(TargetLocation location, List<FlickrPhoto> photos) {
@@ -2175,20 +2355,25 @@ public class FlickrSeedService {
 
     // ==================== TAG BUCKET SELECTION ====================
 
+    /** Tags that suggest crowd/event content; we down-rank these in diversity so photogenic shots are preferred. */
+    private static final Set<String> CROWD_EVENT_TAGS = Set.of("people", "crowd", "festival", "event", "parade");
+
     /**
-     * Select up to 2 buckets for landmark based on name keywords.
+     * Select up to 2 buckets for landmark based on name keywords and density.
+     * Dense downtown (small radius): ARCHITECTURE + NIGHT_VIBE for photogenic intent.
      */
     private String[][] selectBucketsForLandmark(TargetLocation location) {
         String nameLower = location.getName().toLowerCase();
         boolean isNature = NATURE_KEYWORDS.stream().anyMatch(nameLower::contains);
-        
+        boolean isDenseDowntown = location.getRadiusKm() <= 0.5;
+
         if (isNature) {
-            // Nature-related landmark: NATURE_PARK + STREET_ART
             return new String[][]{NATURE_PARK_BUCKET, STREET_ART_BUCKET};
-        } else {
-            // Default: STREET_ART + NIGHT_VIBE
-            return new String[][]{STREET_ART_BUCKET, NIGHT_VIBE_BUCKET};
         }
+        if (isDenseDowntown) {
+            return new String[][]{ARCHITECTURE_BUCKET, NIGHT_VIBE_BUCKET};
+        }
+        return new String[][]{STREET_ART_BUCKET, NIGHT_VIBE_BUCKET};
     }
 
     /**
@@ -2209,10 +2394,12 @@ public class FlickrSeedService {
             return photos;
         }
 
-        // Sort by views desc, dateUpload desc, id for stable ordering
+        // Sort: prefer non-crowd/event tags, then views desc, then resolution (pixels), then date, then id
         List<FlickrPhoto> sorted = new ArrayList<>(photos);
         sorted.sort(Comparator
-                .comparingInt(FlickrPhoto::getViews).reversed()
+                .comparingInt((FlickrPhoto p) -> hasAnyTag(p, CROWD_EVENT_TAGS) ? 1 : 0)
+                .thenComparingInt(FlickrPhoto::getViews).reversed()
+                .thenComparingLong((FlickrPhoto p) -> effectivePixelCount(p)).reversed()
                 .thenComparingLong(FlickrPhoto::getDateUpload).reversed()
                 .thenComparing(FlickrPhoto::getId));
 

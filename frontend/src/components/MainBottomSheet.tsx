@@ -29,7 +29,6 @@ import {
 } from 'react-native';
 import { useTheme } from '../constants/theme';
 import {
-    filterLandmarks,
     getPreferredPhotoUrl,
     getSpotById,
     getSpotPhotos,
@@ -264,7 +263,8 @@ export const MainBottomSheet = forwardRef<MainBottomSheetRef, MainBottomSheetPro
 
       try {
         const spots = await searchSpots(searchQuery.trim());
-        const filtered = filterLandmarks(spots);
+        // Search only shows landmarks (named spots) - photospots have no names to search
+        const filtered = spots.filter(s => s.categories?.includes('landmark'));
         setSearchResults(filtered);
       } catch (err) {
         console.error('Search failed:', err);
