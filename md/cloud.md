@@ -691,3 +691,232 @@ connect Expo cleanly
 or write a short “AWS architecture” blurb for your resume
 
 Just tell me.
+
+
+### Backend Deployment (EC2 + Docker)
+
+The backend is deployed on a single Amazon EC2 instance (x86_64, t3.micro) using Docker Compose.
+
+**Architecture**
+- EC2 (Amazon Linux 2023, x86_64)
+- Docker + Docker Compose v2
+- Spring Boot API container
+- PostgreSQL + PostGIS container
+- ECR for image storage
+
+**Containers**
+- `photospots-api`: Spring Boot backend (port 8080 → 80)
+- `photospots-db`: PostgreSQL 16 with PostGIS 3.4
+
+**Networking**
+- EC2 Security Group:
+  - Port 80 open to the internet
+  - Port 22 restricted to my IP
+- Containers communicate via Docker network
+
+**Deployment flow**
+1. Build backend Docker image (linux/amd64) locally
+2. Push image to AWS ECR
+3. EC2 pulls image via IAM role
+4. Docker Compose runs backend + PostGIS
+
+**Health check**
+- `GET /actuator/health`
+- Public URL: `http://<EC2_PUBLIC_IP>/actuator/health`
+
+This setup replaces ECS, ALB, and RDS to minimize cost while keeping a production-like architecture.
+
+🔁 How updates work now (this is key)
+
+When you change backend code:
+
+# from backend repo
+docker buildx build \
+  --platform linux/amd64 \
+  -t 412914223847.dkr.ecr.us-east-2.amazonaws.com/photospots-backend:latest \
+  --push .
+
+
+Then on EC2:
+
+cd ~/photospots
+docker compose pull
+docker compose up -d
+
+
+On your laptop:
+
+docker buildx build --platform linux/amd64 \
+  -t 412914223847.dkr.ecr.us-east-2.amazonaws.com/photospots-backend:latest \
+  --push .
+
+
+On EC2:
+
+cd ~/photospots
+docker compose pull api
+docker compose up -d
+
+
+That’s it.
+
+That’s your deploy. No CI needed (yet).
+
+chmod 400 photospots-pair.pem
+ssh -i photospots-pair.pem ec2-user@3.129.204.44
+
+to log into ec2.
+
+Right now you should delete:
+
+❌ ECS Cluster
+
+❌ ECS Service
+
+❌ Application Load Balancer
+
+❌ Target Groups
+
+❌ RDS instance (if still running)
+
+❌ Old ARM EC2 instance
+
+Backend Cloud Deployment (Final Architecture)
+Overview
+
+The backend is deployed on a single EC2 instance using Docker Compose, with PostgreSQL + PostGIS and a Spring Boot API, fronted by Caddy for automatic HTTPS and domain routing.
+This setup intentionally replaces ECS, ALB, and RDS to minimize cost and operational complexity while remaining production-grade.
+
+Infrastructure
+Compute
+
+Amazon EC2
+
+Instance type: t3.micro (x86_64)
+
+OS: Amazon Linux 2023
+
+Region: us-east-2
+
+Elastic IP attached (static public IP)
+
+Containers (Docker Compose)
+
+photospots-api
+
+Spring Boot backend
+
+Runs on port 8080 (internal)
+
+Image stored in AWS ECR (linux/amd64)
+
+photospots-db
+
+PostgreSQL 16 with PostGIS 3.4
+
+Persistent volume for data
+
+Networking & Security
+Domain & DNS
+
+Domain: photospots.live
+
+API subdomain: api.photospots.live
+
+DNS A record points to the EC2 Elastic IP
+
+HTTPS & Reverse Proxy
+
+Caddy runs directly on the EC2 host
+
+Automatically provisions and renews TLS certificates via Let’s Encrypt
+
+Handles:
+
+HTTPS on port 443
+
+HTTP → HTTPS redirects on port 80
+
+Reverse proxies traffic to the backend container (localhost:8080)
+
+Ports
+
+Public:
+
+80 (HTTP → HTTPS redirect)
+
+443 (HTTPS)
+
+Private:
+
+8080 (Spring Boot, internal only)
+
+5432 (Postgres, Docker network only)
+
+Deployment Flow
+Build & Push (Local)
+docker buildx build \
+  --platform linux/amd64 \
+  -t <account-id>.dkr.ecr.us-east-2.amazonaws.com/photospots-backend:latest \
+  --push .
+
+Deploy (EC2)
+cd ~/photospots
+docker compose pull api
+docker compose up -d
+
+
+Caddy automatically serves the updated backend over HTTPS.
+
+Health & Verification
+
+Health endpoint:
+
+https://api.photospots.live/actuator/health
+
+
+HTTP requests are permanently redirected to HTTPS.
+
+Caddy runs as a systemd service and restarts automatically on reboot.
+
+Cost Optimization Decisions
+
+Removed:
+
+ECS (clusters, services, task definitions)
+
+Application Load Balancer
+
+RDS (Postgres replaced by containerized PostGIS)
+
+Result:
+
+Always-on backend
+
+Approximately $10/month steady-state cost
+
+Full control over runtime and data
+
+Rationale
+
+This architecture was chosen to:
+
+Support low traffic (~tens of users)
+
+Maintain full PostGIS capability
+
+Reduce AWS cost and complexity
+
+Preserve a realistic, production-style deployment model
+
+Avoid unnecessary managed services until scale demands them
+
+If you want next:
+
+I can tighten this further (container-only networking, firewall hardening),
+
+turn it into a 1-page architecture diagram, or
+
+help you phrase this as resume bullets / interview answers.
+
+But infra-wise — this section is complete and solid.
