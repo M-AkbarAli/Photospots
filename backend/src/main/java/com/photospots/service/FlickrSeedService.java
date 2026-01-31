@@ -304,9 +304,9 @@ public class FlickrSeedService {
         /** Event/crowd photos are only allowed if very close and strongly tagged to the landmark. */
         private static final double MAX_EVENT_DISTANCE_METERS = 200.0;
         private static final Set<String> BASE_LOCATION_TOKENS = Set.of("toronto", "ontario", "canada");
-        private static final int CANDIDATES_PER_HOTSPOT = 120;
+        private static final int CANDIDATES_PER_HOTSPOT = 400; // Scan enough photos while keeping speed reasonable
         private static final int BLUR_THRESHOLD = 60;
-
+        private static final int TARGET_PHOTOS_PER_SPOT = 12; // Stop early if we reach this many
         private static final int PYTHON_TIMEOUT_SECONDS = 45;
 
         private static final String VISION_SCRIPT = Paths.get("tools", "photo_filter", "filter_photos.py").toString();
@@ -402,14 +402,19 @@ public class FlickrSeedService {
             rateLimitDelay();
             callCount++;
 
-            System.out.println("      ⭐ [NAME-FIRST] Searching by interestingness" + (placeId != null ? " (place_id scoped)" : "") + "...");
-            List<FlickrPhoto> interestingPhotos = clampToGtaAndRadius(attemptLocation, 
-                    searchPhotosWithPlaceScope(apiKey, attemptLocation, "interestingness-desc", placeId), counters);
-            int interestingCount = addUniquePhotos(interestingPhotos, allPhotos, seenPhotoIds);
-            duplicateCount += Math.max(0, interestingPhotos.size() - interestingCount);
-            logStrategy("name-interesting", counters, interestingPhotos.size(), interestingCount, interestingPhotos.size() - interestingCount);
-            rateLimitDelay();
-            callCount++;
+            // Skip interestingness search if we already have plenty from relevance
+            if (allPhotos.size() < CANDIDATES_PER_HOTSPOT / 2) {
+                System.out.println("      ⭐ [NAME-FIRST] Searching by interestingness" + (placeId != null ? " (place_id scoped)" : "") + "...");
+                List<FlickrPhoto> interestingPhotos = clampToGtaAndRadius(attemptLocation, 
+                        searchPhotosWithPlaceScope(apiKey, attemptLocation, "interestingness-desc", placeId), counters);
+                int interestingCount = addUniquePhotos(interestingPhotos, allPhotos, seenPhotoIds);
+                duplicateCount += Math.max(0, interestingPhotos.size() - interestingCount);
+                logStrategy("name-interesting", counters, interestingPhotos.size(), interestingCount, interestingPhotos.size() - interestingCount);
+                rateLimitDelay();
+                callCount++;
+            } else {
+                System.out.println("      ⏩ Skipping interestingness search - already have " + allPhotos.size() + " candidates");
+            }
 
             // Cap alt-name searches to 1 when geo-first is enabled (to stay under 6 calls)
             if (attemptLocation.getAlternateNames() != null && attemptLocation.getAlternateNames().length > 0) {
@@ -676,6 +681,12 @@ public class FlickrSeedService {
 
                 System.out.println("         Photo spot " + clusterIdx + "/" + photospotUpserts + ": " + 
                                    clusterStats.inserted + " photos inserted (from " + clusterPhotos.size() + " candidates)");
+                
+                // Early exit if we've inserted enough photos
+                if (totalInserted >= TARGET_PHOTOS_PER_SPOT) {
+                    System.out.println("      ⏩ Reached target of " + TARGET_PHOTOS_PER_SPOT + " photos, stopping early");
+                    break;
+                }
             }
         }
 
@@ -879,6 +890,9 @@ public class FlickrSeedService {
    }
 
     private FilterOutcome filterForQuality(TargetLocation location, List<FlickrPhoto> photos) {
+
+        //TEMP FILTER SKIP. TO DO!!! REMVE This LATER.
+        return new FilterOutcome(photos, 0, 0, 0, 0);
         List<FlickrPhoto> filtered = new ArrayList<>();
         int missingGeo = 0;
         int missingUrl = 0;
@@ -1505,19 +1519,29 @@ public class FlickrSeedService {
             }
 
             String output;
+            String errorOutput;
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                output = reader.lines().collect(Collectors.joining());
+                output = reader.lines().collect(Collectors.joining("\n"));
             }
 
-            if (process.exitValue() != 0) {
-                System.out.println("      ⚠️  Vision filter unavailable, skipping portrait/blur checks.");
+            int exitCode = process.exitValue();
+            if (exitCode != 0) {
+                System.out.println("      ⚠️  Vision filter failed with exit code " + exitCode);
+                System.out.println("      Script output: " + (output.length() > 200 ? output.substring(0, 200) + "..." : output));
                 return results;
+            }
+
+            // Log stderr to see Python warnings/errors
+            if (output.contains("Processing") || output.contains("Processed")) {
+                // Extract stderr messages (they're mixed in redirectErrorStream)
+                System.out.println("      🐍 Vision filter: " + output.split("\n")[0]);
             }
 
             results.putAll(parseVisionResponse(output));
             return results;
         } catch (Exception e) {
-            System.out.println("      ⚠️  Vision filter unavailable, skipping portrait/blur checks. Reason: " + e.getMessage());
+            System.out.println("      ⚠️  Vision filter error: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            e.printStackTrace();
             return results;
         }
     }
@@ -1525,8 +1549,21 @@ public class FlickrSeedService {
     private Map<String, VisionResult> parseVisionResponse(String output) {
         Map<String, VisionResult> parsed = new HashMap<>();
         try {
-            JsonNode root = objectMapper.readTree(output);
+            // Output may contain stderr messages followed by JSON - extract just the JSON
+            String jsonPart = output;
+            int jsonStart = output.indexOf("{");
+            if (jsonStart > 0) {
+                // Log any stderr that came before JSON
+                String stderr = output.substring(0, jsonStart).trim();
+                if (!stderr.isEmpty()) {
+                    System.out.println("      🐍 Vision stderr: " + stderr);
+                }
+                jsonPart = output.substring(jsonStart);
+            }
+            
+            JsonNode root = objectMapper.readTree(jsonPart);
             if (root == null || !root.isObject()) {
+                System.out.println("      ⚠️  Vision filter returned invalid JSON structure");
                 return parsed;
             }
             root.fields().forEachRemaining(entry -> {
@@ -1536,7 +1573,8 @@ public class FlickrSeedService {
                 }
             });
         } catch (Exception e) {
-            // ignore parsing errors and fallback to metadata-only
+            System.out.println("      ⚠️  Failed to parse vision response: " + e.getMessage());
+            System.out.println("      Raw output: " + (output.length() > 500 ? output.substring(0, 500) + "..." : output));
         }
         return parsed;
     }
@@ -1554,10 +1592,12 @@ public class FlickrSeedService {
     }
 
     private String chooseVisionUrl(FlickrPhoto photo) {
-        if (StringUtils.hasText(photo.getUrlS())) return photo.getUrlS();
-        if (StringUtils.hasText(photo.getUrlM())) return photo.getUrlM();
+        // Prefer larger images for better face/body detection by Haar cascades
         if (StringUtils.hasText(photo.getUrlL())) return photo.getUrlL();
-        return constructUrl(photo, "m");
+        if (StringUtils.hasText(photo.getUrlO())) return photo.getUrlO();
+        if (StringUtils.hasText(photo.getUrlM())) return photo.getUrlM();
+        if (StringUtils.hasText(photo.getUrlS())) return photo.getUrlS();
+        return constructUrl(photo, "l");
     }
 
     private String renderQaJson(VisionResult result) {

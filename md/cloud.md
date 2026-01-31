@@ -920,3 +920,58 @@ turn it into a 1-page architecture diagram, or
 help you phrase this as resume bullets / interview answers.
 
 But infra-wise — this section is complete and solid.
+
+Redis disabled in production by excluding Redis auto-config:
+
+SPRING_CACHE_TYPE=none
+
+MANAGEMENT_HEALTH_REDIS_ENABLED=false
+
+SPRING_AUTOCONFIGURE_EXCLUDE=...RedisAutoConfiguration...
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: photospots-db
+    environment:
+      POSTGRES_DB: photospots
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: photospots-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    restart: unless-stopped
+
+  api:
+    image: 412914223847.dkr.ecr.us-east-2.amazonaws.com/photospots-backend:latest
+    container_name: photospots-api
+    depends_on:
+      - db
+      - redis
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/photospots
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+
+      # If your code expects redis, route it to the redis container
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+
+      # keep JVM stable on 1GB RAM
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=60 -XX:InitialRAMPercentage=30"
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  db_data:
+
+newesr docker compose.
+
+ssh -i photospots-pair.pem ec2-user@3.20.182.232
+
