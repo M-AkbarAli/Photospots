@@ -975,3 +975,48 @@ newesr docker compose.
 
 ssh -i photospots-pair.pem ec2-user@3.20.182.232
 
+Logical dump (recommended) — small, portable, safest for restore:
+
+cd ~/photospots
+mkdir -p backups
+docker compose exec db pg_dump -U postgres -d photospots | gzip > backups/photospots_$(date +%Y%m%d_%H%M%S).sql.gz
+To restore into the same container later: gunzip -c backups/photospots_YYYYMMDD_HHMMSS.sql.gz | docker compose exec -T db psql -U postgres -d photospots
+
+
+how change db
+docker exec photospots-postgres pg_dump -U photospots -d photospots -F c -f /tmp/photospots_backup.dump
+docker cp photospots-postgres:/tmp/photospots_backup.dump /Users/akbar/Desktop/Expo/Photospots/photospots_backup.dump
+ls -lh /Users/akbar/Desktop/Expo/Photospots/photospots_backup.dump
+
+
+
+on ec2
+
+cd ~/photospots
+docker compose stop api
+docker cp ~/photospots_backup.dump photospots-db:/tmp/photospots_backup.dump
+docker exec photospots-db pg_restore -U postgres -d photospots --clean --if-exists /tmp/photospots_backup.dump
+docker compose restart api
+
+
+gunzip -c backups/photospots_20260131_223153.sql.gz | docker compose exec -T db psql -U postgres -d photospots
+
+cd ~/photospots
+
+# 1. Stop the API
+docker compose stop api
+
+# 2. Drop the database
+docker compose exec db psql -U postgres -d postgres -c "DROP DATABASE IF EXISTS photospots;"
+
+# 3. Create fresh database
+docker compose exec db psql -U postgres -d postgres -c "CREATE DATABASE photospots;"
+
+# 4. Restore the backup
+gunzip -c backups/photospots_20260131_223153.sql.gz | docker compose exec -T db psql -U postgres -d photospots
+
+# 5. Restart API
+docker compose restart api
+
+# 6. Verify spots count
+docker compose exec db psql -U postgres -d photospots -c "SELECT COUNT(*) FROM spots;"

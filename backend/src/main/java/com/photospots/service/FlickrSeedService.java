@@ -890,9 +890,7 @@ public class FlickrSeedService {
    }
 
     private FilterOutcome filterForQuality(TargetLocation location, List<FlickrPhoto> photos) {
-
-        //TEMP FILTER SKIP. TO DO!!! REMVE This LATER.
-        return new FilterOutcome(photos, 0, 0, 0, 0);
+        
         List<FlickrPhoto> filtered = new ArrayList<>();
         int missingGeo = 0;
         int missingUrl = 0;
@@ -2430,6 +2428,9 @@ public class FlickrSeedService {
      * Returns filtered list with preserved deterministic ordering.
      */
     private List<FlickrPhoto> applyDiversityPruning(List<FlickrPhoto> photos, int maxPerOwner) {
+
+        
+        
         if (photos.isEmpty()) {
             return photos;
         }
